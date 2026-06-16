@@ -1,0 +1,96 @@
+codex exec --sandbox workspace-write "
+当前项目是 EnTeR-Track + PCUM 三机协同跟踪算法。请不要修改训练代码，只生成 Visio 框架图文件。
+
+目标：
+在 docs/pcum_framework.vsdx 中生成算法流程图，使用 Microsoft Visio COM 自动化。
+如果当前环境没有 Windows/Visio/pywin32，则只生成 docs/pcum_framework_visio.py 脚本并说明需要在装有 Visio 的 Windows 机器上运行。
+
+请创建流程图，内容如下：
+
+标题：
+EnTeR-Track + PCUM Real Multi-View Tracking Framework
+
+整体分 5 个区域：
+1. Data Sampling
+2. Per-View Feature Encoding
+3. PCUM Prompt Fusion
+4. Tracking Prediction
+5. Training / Evaluation
+
+流程节点：
+
+Data Sampling 区域：
+- ThreeMDOT synchronized A/B/C UAV videos
+- Same target, same timestamp sampling
+- Require all views visible
+- Template/Search crop generation
+- template_view_valid / search_view_valid masks
+
+Per-View Feature Encoding 区域：
+- View A template/search
+- View B template/search
+- View C template/search
+- Shared ViT-Tiny ARP Backbone
+- Candidate token pruning by ARP
+- Search tokens and template tokens
+
+PCUM Prompt Fusion 区域：
+- Warm forward for each view
+- Extract local prompt P_A, P_B, P_C
+- Detach remote prompts
+- Remote prompt visibility mask
+- cosine_confidence alignment gate
+- Prompt fusion into target search tokens
+- Residual scale capped by FUSION_SCALE_MAX
+
+Tracking Prediction 区域：
+- CENTER tracking head
+- score map
+- bbox / size / offset maps
+- per-view prediction
+- fused tracking result
+
+Training / Evaluation 区域：
+- GIoU loss
+- L1 loss
+- focal score-map loss
+- optional FLOPs loss from ARP
+- validation on ThreeMDOT_VAL
+- test on ThreeMDOT_TEST
+- report AUC / Precision / FPS
+
+连接关系：
+ThreeMDOT synchronized A/B/C UAV videos -> Same target, same timestamp sampling
+Same target, same timestamp sampling -> Require all views visible
+Require all views visible -> Template/Search crop generation
+Template/Search crop generation -> View A template/search
+Template/Search crop generation -> View B template/search
+Template/Search crop generation -> View C template/search
+View A/B/C template/search -> Shared ViT-Tiny ARP Backbone
+Shared ViT-Tiny ARP Backbone -> Candidate token pruning by ARP
+Candidate token pruning by ARP -> Search tokens and template tokens
+Search tokens and template tokens -> Warm forward for each view
+Warm forward for each view -> Extract local prompt P_A, P_B, P_C
+Extract local prompt P_A, P_B, P_C -> Detach remote prompts
+Detach remote prompts -> Remote prompt visibility mask
+Remote prompt visibility mask -> cosine_confidence alignment gate
+cosine_confidence alignment gate -> Prompt fusion into target search tokens
+Prompt fusion into target search tokens -> CENTER tracking head
+CENTER tracking head -> score map
+CENTER tracking head -> bbox / size / offset maps
+score map and bbox outputs -> per-view prediction
+per-view prediction -> fused tracking result
+CENTER tracking head -> GIoU loss / L1 loss / focal score-map loss
+Candidate token pruning by ARP -> optional FLOPs loss from ARP
+losses -> validation/test metrics
+
+视觉要求：
+- 横向流程，从左到右。
+- 每个区域用浅色背景分组。
+- 三个 UAV 视角用三条并行分支表示。
+- PCUM 模块用醒目颜色突出。
+- ARP 模块用虚线边框表示它是可选效率约束。
+- FLOPs loss 用虚线连接到 loss 区域。
+- 不要画通信模块、事件触发、带宽限制、丢包或延迟。
+- 输出 docs/pcum_framework.vsdx。
+"

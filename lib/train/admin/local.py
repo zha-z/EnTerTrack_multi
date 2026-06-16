@@ -1,0 +1,26 @@
+class EnvironmentSettings:
+    def __init__(self):
+        self.workspace_dir = '/data/zjy/EnTeR-Track-main'    # Base directory for saving network checkpoints.
+        self.tensorboard_dir = '/data/zjy/EnTeR-Track-main/tensorboard'    # Directory for tensorboard files.
+        self.pretrained_networks = '/data/zjy/EnTeR-Track-main/pretrained_networks'
+        self.lasot_dir = '/data2/lasot'
+        self.twomdot_dir = '/data2/Two-MDOT/two'
+        self.threemdot_dir = '/data2/Three-MDOT'
+        self.got10k_dir = '/data2/got10k/train'
+        self.got10k_val_dir = '/data2/got10k/val'
+        self.lasot_lmdb_dir = '/data2/lasot_lmdb'
+        self.got10k_lmdb_dir = '/data2/got10k_lmdb'
+        self.trackingnet_dir = '/data2/trackingnet'
+        self.trackingnet_lmdb_dir = '/data2/trackingnet_lmdb'
+        self.coco_dir = '/data2/coco'
+        self.coco_lmdb_dir = '/data2/coco_lmdb'
+        self.lvis_dir = ''
+        self.sbd_dir = ''
+        self.imagenet_dir = '/data2/vid'
+        self.imagenet_lmdb_dir = '/data2/vid_lmdb'
+        self.imagenetdet_dir = ''
+        self.ecssd_dir = ''
+        self.hkuis_dir = ''
+        self.msra10k_dir = ''
+        self.davis_dir = ''
+        self.youtubevos_dir = ''
