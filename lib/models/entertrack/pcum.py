@@ -125,16 +125,29 @@ class PromptConsistencyLoss(nn.Module):
 class SaliencyTokenSelector(nn.Module):
     """Select top-k salient tokens from search/template features."""
 
-    def __init__(self, topk=16, source="feature_norm"):
+    def __init__(self, topk=16, source="feature_norm", entropy_weight=0.5,
+                 atp_weight=0.5):
         super().__init__()
-        if source not in ("attention_score", "feature_norm", "confidence_score"):
+        if source not in (
+            "attention_score",
+            "feature_norm",
+            "confidence_score",
+            "arp_entropy",
+            "arp_mixed",
+        ):
             raise ValueError("Unsupported saliency source: %s" % source)
         self.topk = int(topk)
         self.source = source
+        self.entropy_weight = float(entropy_weight)
+        self.atp_weight = float(atp_weight)
 
-    def _prepare_score(self, score, num_tokens):
+    def _prepare_score(self, score, num_tokens, search_len=None, template_len=0):
         if score is None:
             return None
+        if isinstance(score, (list, tuple)):
+            if len(score) == 0:
+                return None
+            score = score[-1]
         if score.dim() == 4:
             score = score.flatten(2).mean(dim=1)
         elif score.dim() == 3:
@@ -147,6 +160,20 @@ class SaliencyTokenSelector(nn.Module):
         elif score.dim() > 4:
             score = score.flatten(1)
 
+        if (
+            search_len is not None
+            and template_len > 0
+            and score.shape[-1] == search_len
+            and num_tokens == search_len + template_len
+        ):
+            template_score = torch.zeros(
+                score.shape[0],
+                template_len,
+                device=score.device,
+                dtype=score.dtype,
+            )
+            score = torch.cat([template_score, score], dim=-1)
+
         if score.shape[-1] != num_tokens:
             score = F.interpolate(
                 score.unsqueeze(1).float(),
@@ -156,31 +183,110 @@ class SaliencyTokenSelector(nn.Module):
             ).squeeze(1).to(dtype=score.dtype)
         return score
 
+    def _normalize_score(self, score):
+        if score is None:
+            return None
+        score = score.float()
+        min_score = score.min(dim=1, keepdim=True).values
+        max_score = score.max(dim=1, keepdim=True).values
+        return (score - min_score) / (max_score - min_score + 1e-6)
+
+    def _attention_entropy_score(self, attention_score, num_tokens,
+                                 search_len=None, template_len=0):
+        if attention_score is None:
+            return None
+        if isinstance(attention_score, (list, tuple)):
+            if len(attention_score) == 0:
+                return None
+            attention_score = attention_score[-1]
+
+        if attention_score.dim() == 4:
+            attn = attention_score.clamp(min=1e-10)
+            entropy = -(attn * attn.log()).sum(dim=-2).mean(dim=1)
+            return self._prepare_score(
+                entropy,
+                num_tokens,
+                search_len=search_len,
+                template_len=template_len,
+            )
+
+        return self._prepare_score(
+            attention_score,
+            num_tokens,
+            search_len=search_len,
+            template_len=template_len,
+        )
+
     def forward(self, search_feature, template_feature=None,
-                attention_score=None, confidence_score=None, source=None):
+                attention_score=None, confidence_score=None, atp_mask=None,
+                source=None):
         if search_feature.dim() != 3:
             raise ValueError("search_feature must have shape [B, N, C]")
 
         tokens = search_feature
         search_len = search_feature.shape[1]
+        template_len = 0
         if template_feature is not None:
             if template_feature.dim() != 3:
                 raise ValueError("template_feature must have shape [B, N, C]")
+            template_len = template_feature.shape[1]
             tokens = torch.cat([template_feature, search_feature], dim=1)
 
         B, N, C = tokens.shape
         saliency_source = source or self.source
 
         if saliency_source == "attention_score":
-            score = self._prepare_score(attention_score, N)
+            score = self._prepare_score(
+                attention_score,
+                N,
+                search_len=search_len,
+                template_len=template_len,
+            )
             if score is None:
                 score = tokens.norm(dim=-1)
         elif saliency_source == "confidence_score":
-            score = self._prepare_score(confidence_score, N)
+            score = self._prepare_score(
+                confidence_score,
+                N,
+                search_len=search_len,
+                template_len=template_len,
+            )
             if score is None:
                 score = tokens.norm(dim=-1)
         elif saliency_source == "feature_norm":
             score = tokens.norm(dim=-1)
+        elif saliency_source == "arp_entropy":
+            score = self._attention_entropy_score(
+                attention_score,
+                N,
+                search_len=search_len,
+                template_len=template_len,
+            )
+            if score is None:
+                score = tokens.norm(dim=-1)
+        elif saliency_source == "arp_mixed":
+            feature_score = self._normalize_score(tokens.norm(dim=-1))
+            entropy_score = self._normalize_score(
+                self._attention_entropy_score(
+                    attention_score,
+                    N,
+                    search_len=search_len,
+                    template_len=template_len,
+                )
+            )
+            atp_score = self._normalize_score(
+                self._prepare_score(
+                    atp_mask,
+                    N,
+                    search_len=search_len,
+                    template_len=template_len,
+                )
+            )
+            score = feature_score
+            if entropy_score is not None:
+                score = score + self.entropy_weight * entropy_score
+            if atp_score is not None:
+                score = score + self.atp_weight * atp_score
         else:
             raise ValueError("Unsupported saliency source: %s" % saliency_source)
 
@@ -384,11 +490,16 @@ class PCUM(nn.Module):
     def __init__(self, token_dim, prompt_dim=None, num_prompts=4, topk=16,
                  saliency_source="feature_norm", fusion_mode="gated_add",
                  align_gate="cosine", enabled=False, fusion_init_scale=0.0,
-                 fusion_scale_max=0.0):
+                 fusion_scale_max=0.0, entropy_weight=0.5, atp_weight=0.5):
         super().__init__()
         prompt_dim = int(prompt_dim or token_dim)
         self.enabled = bool(enabled)
-        self.selector = SaliencyTokenSelector(topk=topk, source=saliency_source)
+        self.selector = SaliencyTokenSelector(
+            topk=topk,
+            source=saliency_source,
+            entropy_weight=entropy_weight,
+            atp_weight=atp_weight,
+        )
         self.encoder = MultiLayerPromptEncoder(
             input_dim=token_dim,
             prompt_dim=prompt_dim,
@@ -412,14 +523,15 @@ class PCUM(nn.Module):
         layers = features.get("layers", None)
         attention = features.get("attention_score", None)
         confidence = features.get("confidence_score", None)
+        atp_mask = features.get("atp_mask", features.get("atp_masks", None))
         if search is None and layers is not None:
             search = _as_layer_list(layers)[-1]
         if search is None:
             raise ValueError("features must provide search/search_tokens or layers")
-        return search, template, layers, attention, confidence
+        return search, template, layers, attention, confidence, atp_mask
 
     def forward(self, features, local_state=None, remote_prompts=None, remote_states=None):
-        search_tokens, template_tokens, layers, attention_score, confidence_score = self._unpack_features(features)
+        search_tokens, template_tokens, layers, attention_score, confidence_score, atp_mask = self._unpack_features(features)
         if not self.enabled:
             return {
                 "search_tokens": search_tokens,
@@ -434,6 +546,7 @@ class PCUM(nn.Module):
             template_feature=template_tokens,
             attention_score=attention_score,
             confidence_score=confidence_score,
+            atp_mask=atp_mask,
         )
 
         prompt_input = selected["tokens"]
@@ -445,6 +558,7 @@ class PCUM(nn.Module):
                     template_feature=None,
                     attention_score=attention_score,
                     confidence_score=confidence_score,
+                    atp_mask=atp_mask,
                 )
                 prompt_input.append(layer_selected["tokens"])
 
@@ -481,4 +595,6 @@ def build_pcum(cfg, token_dim=None):
         enabled=pcum_cfg.ENABLED,
         fusion_init_scale=getattr(pcum_cfg, "FUSION_INIT_SCALE", 0.0),
         fusion_scale_max=getattr(pcum_cfg, "FUSION_SCALE_MAX", 0.0),
+        entropy_weight=getattr(pcum_cfg, "ENTROPY_WEIGHT", 0.5),
+        atp_weight=getattr(pcum_cfg, "ATP_WEIGHT", 0.5),
     )

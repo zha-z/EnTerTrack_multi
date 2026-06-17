@@ -126,6 +126,52 @@ class VisionTransformerCE(VisionTransformer):
                 )
                 return x_recovered, None
             return x, global_index_s
+
+    def _recover_layer_tokens(self, tokens, global_index_t, global_index_s,
+                              frozen_token, atp_mask, removed_index,
+                              lens_x, training):
+        lens_z_new = global_index_t.shape[1]
+        z_tokens = tokens[:, :lens_z_new]
+        search_tokens = tokens[:, lens_z_new:]
+
+        if frozen_token is not None and atp_mask is not None:
+            search_tokens, _ = self._recover_frozen_tokens(
+                search_tokens,
+                frozen_token,
+                atp_mask,
+                removed_index,
+                global_index_s,
+                lens_z_new,
+                training,
+            )
+        elif removed_index is not None and search_tokens.shape[1] != lens_x:
+            pruned_lens_x = lens_x - search_tokens.shape[1]
+            if pruned_lens_x > 0:
+                pad_x = torch.zeros(
+                    tokens.shape[0],
+                    pruned_lens_x,
+                    tokens.shape[2],
+                    device=tokens.device,
+                    dtype=tokens.dtype,
+                )
+                search_tokens = torch.cat([search_tokens, pad_x], dim=1)
+                index_all = torch.cat([global_index_s, removed_index], dim=1)
+                search_tokens = torch.zeros_like(search_tokens).scatter_(
+                    dim=1,
+                    index=index_all.unsqueeze(-1).expand(
+                        tokens.shape[0], -1, tokens.shape[2]
+                    ).to(torch.int64),
+                    src=search_tokens,
+                )
+
+        search_tokens = recover_tokens(
+            search_tokens,
+            lens_z_new,
+            lens_x,
+            mode=self.cat_mode,
+        )
+        return torch.cat([z_tokens, search_tokens], dim=1)
+
     def forward_features(self, z, x, mask_z=None, mask_x=None,
                          ce_template_mask=None, ce_keep_rate=None,
                          return_last_attn=False, return_atp=False, training: bool = True, temperature=2.0
@@ -174,6 +220,7 @@ class VisionTransformerCE(VisionTransformer):
         atp_masks = []
         attn_mask = None
         tokens = []
+        inter_layers = []
         frozen_token = None
         for i, blk in enumerate(self.blocks):
             x, global_index_s, removed_index_s, attn, atp_mask, attn_mask, frozen_token = \
@@ -184,6 +231,21 @@ class VisionTransformerCE(VisionTransformer):
                 attn_mask = ~(attn_mask.bool())
             if self.ce_loc is not None and i in self.ce_loc and removed_index_s is not None:
                 removed_indexes_s.append(removed_index_s)
+            if self.return_inter and i in self.return_stage:
+                layer_tokens = self._recover_layer_tokens(
+                    x,
+                    global_index_t,
+                    global_index_s,
+                    frozen_token,
+                    atp_masks[-1] if atp_masks else None,
+                    removed_indexes_s[-1] if removed_indexes_s else None,
+                    lens_x,
+                    training,
+                )
+                norm_layer = getattr(self, "norm%d" % i, None)
+                if norm_layer is not None:
+                    layer_tokens = norm_layer(layer_tokens)
+                inter_layers.append(layer_tokens)
         x = self.norm(x)
         lens_x_new = global_index_s.shape[1]
         lens_z_new = global_index_t.shape[1]
@@ -217,6 +279,7 @@ class VisionTransformerCE(VisionTransformer):
             aux_dict = {
                 "attn": attn,
                 "tokens": tokens,
+                "inter_layers": inter_layers,
                 "removed_indexes_s": removed_indexes_s,  # used for visualization
                 'atp_masks': atp_masks,
                 'atp_layers': torch.tensor([0]),
@@ -224,6 +287,7 @@ class VisionTransformerCE(VisionTransformer):
         else:
             aux_dict = {
                 "attn": attn,
+                "inter_layers": inter_layers,
                 "removed_indexes_s": removed_indexes_s,
             }
 
@@ -259,4 +323,3 @@ def vit_tiny_patch16_224_arp(pretrained=False, **kwargs):
         patch_size=16, embed_dim=192, depth=6, num_heads=3, **kwargs)
     model = _create_vision_transformer(pretrained=pretrained, **model_kwargs)
     return model
-

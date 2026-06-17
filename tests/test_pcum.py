@@ -92,13 +92,26 @@ class PCUMShapeTest(unittest.TestCase):
         attention = torch.randn(self.batch, 4, total_len)
         confidence = torch.rand(self.batch, total_len)
 
-        for source in ("attention_score", "feature_norm", "confidence_score"):
+        attention_4d = torch.rand(self.batch, 2, total_len, total_len)
+        atp_mask = torch.tensor([
+            [1.0] * self.search_len,
+            [1.0] * (self.search_len // 2) + [0.0] * (self.search_len - self.search_len // 2),
+        ])
+
+        for source in (
+            "attention_score",
+            "feature_norm",
+            "confidence_score",
+            "arp_entropy",
+            "arp_mixed",
+        ):
             selector = SaliencyTokenSelector(topk=6, source=source)
             out = selector(
                 self.search,
                 template_feature=self.template,
-                attention_score=attention,
+                attention_score=attention_4d if source.startswith("arp") else attention,
                 confidence_score=confidence,
+                atp_mask=atp_mask,
             )
             self.assertEqual(out["tokens"].shape, (self.batch, 6, self.dim))
             self.assertEqual(out["indices"].shape, (self.batch, 6))

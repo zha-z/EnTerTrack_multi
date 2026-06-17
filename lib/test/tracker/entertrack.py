@@ -174,7 +174,8 @@ class EnTeRTrack(BaseTracker):
     # ------------------------------------------------------------
     # Core forward
     # ------------------------------------------------------------
-    def _network_forward(self, search_tensor, prompt_map=None, prompt_gate_input=None):
+    def _network_forward(self, search_tensor, prompt_map=None, prompt_gate_input=None,
+                         remote_prompts=None, remote_states=None):
         """
         EnTeRTrack forward.
 
@@ -189,7 +190,9 @@ class EnTeRTrack(BaseTracker):
             return_atp=True,
             training=False,
             prompt_map=prompt_map,
-            prompt_gate_input=prompt_gate_input
+            prompt_gate_input=prompt_gate_input,
+            remote_prompts=remote_prompts,
+            remote_states=remote_states
         )
 
         return out_dict
@@ -333,27 +336,24 @@ class EnTeRTrack(BaseTracker):
 
         return pred_box, pred_boxes, max_score, response
 
-    def _track_single(
+    def _run_candidate(
         self,
         image,
-        info=None,
         search_factor=None,
-        return_score_apce=False,
-        debug_name="",
         prompt_map=None,
-        prompt_gate_input=None
+        prompt_gate_input=None,
+        remote_prompts=None,
+        remote_states=None,
+        return_score=True
     ):
         """
-        单机跟踪核心函数。
+        Run one forward pass from the current state without committing it.
 
-        Args:
-            image: 当前视角图像
-            search_factor: 如果为 None，使用默认 self.params.search_factor；
-                           如果指定，用于 general_redetect 这类大搜索区域。
-            return_score_apce: 是否返回 max_score 和 APCE。
+        This is used by test-time PCUM: first collect local prompts for all
+        UAVs, then run a second pass with peer prompts and commit only the
+        selected candidate.
         """
         H, W, _ = image.shape
-        self.frame_id += 1
 
         if search_factor is None:
             search_factor = self.params.search_factor
@@ -371,51 +371,162 @@ class EnTeRTrack(BaseTracker):
             out_dict = self._network_forward(
                 search.tensors,
                 prompt_map=prompt_map,
-                prompt_gate_input=prompt_gate_input
+                prompt_gate_input=prompt_gate_input,
+                remote_prompts=remote_prompts,
+                remote_states=remote_states
             )
 
         pred_box, pred_boxes, max_score, response = self._decode_prediction(
             out_dict,
             resize_factor,
-            return_score=return_score_apce
+            return_score=return_score
         )
 
-        self.state = clip_box(
+        target_bbox = clip_box(
             self.map_box_back(pred_box, resize_factor),
             H,
             W,
             margin=10
         )
 
-        if self.debug:
-            self._debug_vis(
-                image=image,
-                info=info,
-                x_patch_arr=x_patch_arr,
-                pred_score_map=out_dict["score_map"],
-                response=response,
-                out_dict=out_dict,
-                debug_name=debug_name
-            )
-
         if self.save_all_boxes:
             all_boxes = self.map_box_back_batch(
                 pred_boxes * self.params.search_size / resize_factor,
                 resize_factor
             )
-
-            all_boxes_save = all_boxes.view(-1).tolist()
-
             output = {
-                "target_bbox": self.state,
-                "all_boxes": all_boxes_save
+                "target_bbox": target_bbox,
+                "all_boxes": all_boxes.view(-1).tolist()
             }
         else:
-            output = {"target_bbox": self.state}
+            output = {"target_bbox": target_bbox}
+
+        return {
+            "output": output,
+            "target_bbox": target_bbox,
+            "max_score": max_score,
+            "apce": self.calAPCE(response),
+            "response": response,
+            "out_dict": out_dict,
+            "pred_boxes": pred_boxes,
+            "x_patch_arr": x_patch_arr,
+            "image": image,
+            "local_prompt": out_dict.get("local_prompt", None),
+            "aligned_prompt": out_dict.get("aligned_prompt", None),
+            "align_gate": out_dict.get("pcum", {}).get("align_gate", None)
+                if isinstance(out_dict.get("pcum", None), dict) else None,
+            "used_remote": remote_prompts is not None,
+        }
+
+    def _commit_candidate(self, candidate, info=None, debug_name=""):
+        self.state = candidate["target_bbox"]
+
+        if self.debug:
+            self._debug_vis(
+                image=candidate.get("image", None),
+                info=info,
+                x_patch_arr=candidate["x_patch_arr"],
+                pred_score_map=candidate["out_dict"]["score_map"],
+                response=candidate["response"],
+                out_dict=candidate["out_dict"],
+                debug_name=debug_name
+            )
+
+        return candidate["output"]
+
+    def _score_value(self, score):
+        return score.item() if torch.is_tensor(score) else float(score)
+
+    def pcum_local_candidate(self, image, search_factor=None):
+        return self._run_candidate(
+            image=image,
+            search_factor=search_factor,
+            return_score=True
+        )
+
+    def pcum_track_with_remote(
+        self,
+        image,
+        info=None,
+        remote_prompts=None,
+        remote_states=None,
+        local_candidate=None,
+        search_factor=None,
+        debug_name=""
+    ):
+        """
+        Commit one PCUM test-time tracking step.
+
+        If remote prompts are unavailable, the supplied local candidate is
+        committed. If configured, a remote candidate that sharply lowers the
+        response score is rejected in favor of the local candidate.
+        """
+        self.frame_id += 1
+
+        remote_prompts = [p for p in (remote_prompts or []) if p is not None]
+        if len(remote_prompts) == 0:
+            candidate = local_candidate or self._run_candidate(
+                image=image,
+                search_factor=search_factor,
+                return_score=True
+            )
+        else:
+            candidate = self._run_candidate(
+                image=image,
+                search_factor=search_factor,
+                remote_prompts=remote_prompts,
+                remote_states=remote_states,
+                return_score=True
+            )
+
+            pcum_test_cfg = getattr(self.cfg.TEST, "PCUM", None)
+            keep_local = bool(getattr(pcum_test_cfg, "KEEP_LOCAL_IF_REMOTE_WORSE", True))
+            max_drop = float(getattr(pcum_test_cfg, "REMOTE_SCORE_MAX_DROP", 0.05))
+            if keep_local and local_candidate is not None:
+                local_score = self._score_value(local_candidate["max_score"])
+                remote_score = self._score_value(candidate["max_score"])
+                if remote_score + max_drop < local_score:
+                    candidate = local_candidate
+
+        output = self._commit_candidate(candidate, info=info, debug_name=debug_name)
+        return output, candidate["max_score"], candidate["apce"]
+
+    def _track_single(
+        self,
+        image,
+        info=None,
+        search_factor=None,
+        return_score_apce=False,
+        debug_name="",
+        prompt_map=None,
+        prompt_gate_input=None,
+        remote_prompts=None,
+        remote_states=None
+    ):
+        """
+        单机跟踪核心函数。
+
+        Args:
+            image: 当前视角图像
+            search_factor: 如果为 None，使用默认 self.params.search_factor；
+                           如果指定，用于 general_redetect 这类大搜索区域。
+            return_score_apce: 是否返回 max_score 和 APCE。
+        """
+        self.frame_id += 1
+
+        candidate = self._run_candidate(
+            image,
+            search_factor=search_factor,
+            prompt_map=prompt_map,
+            prompt_gate_input=prompt_gate_input,
+            remote_prompts=remote_prompts,
+            remote_states=remote_states,
+            return_score=return_score_apce
+        )
+        output = self._commit_candidate(candidate, info=info, debug_name=debug_name)
 
         if return_score_apce:
-            response_APCE = self.calAPCE(response)
-            return output, max_score, response_APCE
+            return output, candidate["max_score"], candidate["apce"]
 
         return output
 

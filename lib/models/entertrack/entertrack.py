@@ -110,17 +110,30 @@ class EnTeRTrack(nn.Module):
         feat_last = x
         if isinstance(x, list):
             feat_last = x[-1]
+        pcum_features = None
+        if self.pcum is not None:
+            pcum_features = {
+                "attention_score": aux_dict.get("attn", None),
+                "atp_mask": aux_dict.get("atp_masks", None),
+            }
+            inter_layers = aux_dict.get("inter_layers", None)
+            if inter_layers:
+                pcum_features["layers"] = [
+                    layer[:, -self.feat_len_s:] for layer in inter_layers
+                ]
+
         out = self.forward_head(feat_last, None, prompt_map=prompt_map,
                                 prompt_gate_input=prompt_gate_input,
                                 remote_prompts=remote_prompts,
-                                remote_states=remote_states)
+                                remote_states=remote_states,
+                                pcum_features=pcum_features)
 
         out.update(aux_dict)
         out['backbone_feat'] = feat_last
         return out
 
     def forward_head(self, cat_feature, gt_score_map=None, prompt_map=None, prompt_gate_input=None,
-                     remote_prompts=None, remote_states=None):
+                     remote_prompts=None, remote_states=None, pcum_features=None):
         """
         cat_feature: output embeddings of the backbone, it can be (HW1+HW2, B, C) or (HW2, B, C)
         """
@@ -128,10 +141,17 @@ class EnTeRTrack(nn.Module):
         pcum_out = None
         if self.pcum is not None:
             template_tokens = cat_feature[:, :-self.feat_len_s]
-            pcum_out = self.pcum({
+            features = {
                 "search": enc_opt,
                 "template": template_tokens,
-            }, remote_prompts=remote_prompts, remote_states=remote_states)
+            }
+            if pcum_features:
+                features.update(pcum_features)
+            pcum_out = self.pcum(
+                features,
+                remote_prompts=remote_prompts,
+                remote_states=remote_states,
+            )
             enc_opt = pcum_out["search_tokens"]
         opt = (enc_opt.unsqueeze(-1)).permute((0, 3, 2, 1)).contiguous()
         bs, Nq, C, HW = opt.size()

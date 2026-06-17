@@ -773,6 +773,63 @@ class Tracker:
             trk.state = old_state
             return out, score, apce
 
+        pcum_test_cfg = getattr(tracker.cfg.TEST, "PCUM", None)
+        pcum_remote_enabled = (
+            bool(_get_cfg_value(pcum_test_cfg, "USE_REMOTE", False))
+            and bool(getattr(getattr(tracker.cfg.MODEL, "PCUM", None), "ENABLED", False))
+            and hasattr(tracker, "pcum_local_candidate")
+            and hasattr(tracker, "pcum_track_with_remote")
+        )
+
+        def _candidate_score(candidate):
+            return _to_float(candidate["max_score"])
+
+        def _candidate_apce(candidate):
+            return _to_float(candidate["apce"])
+
+        def _candidate_is_local_low(candidate):
+            score_thr = float(_get_cfg_value(pcum_test_cfg, "LOCAL_LOW_SCORE_THR", 0.25))
+            apce_thr = float(_get_cfg_value(pcum_test_cfg, "LOCAL_LOW_APCE_THR", 100.0))
+            return _candidate_score(candidate) < score_thr or _candidate_apce(candidate) < apce_thr
+
+        def _valid_remote_candidate(candidate):
+            if candidate is None or candidate.get("local_prompt", None) is None:
+                return False
+            score_thr = float(_get_cfg_value(pcum_test_cfg, "REMOTE_SCORE_THR", 0.0))
+            apce_thr = float(_get_cfg_value(pcum_test_cfg, "REMOTE_APCE_THR", 0.0))
+            return _candidate_score(candidate) >= score_thr and _candidate_apce(candidate) >= apce_thr
+
+        def _remote_inputs_for(target_index, candidates, target_tracker):
+            if bool(_get_cfg_value(pcum_test_cfg, "USE_REMOTE_ONLY_WHEN_LOCAL_LOW", False)):
+                if not _candidate_is_local_low(candidates[target_index]):
+                    return [], None
+
+            peers = [
+                candidate for i, candidate in enumerate(candidates)
+                if i != target_index and _valid_remote_candidate(candidate)
+            ]
+            min_remote = int(_get_cfg_value(pcum_test_cfg, "MIN_REMOTE_PROMPTS", 1))
+            if len(peers) < min_remote:
+                return [], None
+
+            target_device = target_tracker.output_window.device
+            remote_prompts = [
+                candidate["local_prompt"].detach().to(device=target_device)
+                for candidate in peers
+            ]
+            remote_scores = [
+                max(0.0, min(1.0, float(_candidate_score(candidate))))
+                for candidate in peers
+            ]
+            remote_state = {
+                "score": torch.tensor(
+                    [sum(remote_scores) / max(1, len(remote_scores))],
+                    device=target_device,
+                    dtype=torch.float32
+                )
+            }
+            return remote_prompts, remote_state
+
         # ------------------------------------------------------------
         # 初始化：三个 tracker 分别初始化自己的视角
         # ------------------------------------------------------------
@@ -859,63 +916,129 @@ class Tracker:
             if len(seq_c.ground_truth_rect) > 1:
                 info_c['gt_bbox'] = seq_c.ground_truth_rect[frame_num]
 
-            # A 机单机跟踪
-            start_time_a = time.time()
-            out_a, max_score_a, response_APCE_a = tracker.Fusetrack(image_a, info_a)
-            time_a = time.time() - start_time_a
+            if pcum_remote_enabled:
+                start_time_a = time.time()
+                candidate_a = tracker.pcum_local_candidate(image_a)
+                local_time_a = time.time() - start_time_a
 
-            # B 机单机跟踪
-            start_time_b = time.time()
-            out_b, max_score_b, response_APCE_b = tracker2.Fusetrack(image_b, info_b)
-            time_b = time.time() - start_time_b
+                start_time_b = time.time()
+                candidate_b = tracker2.pcum_local_candidate(image_b)
+                local_time_b = time.time() - start_time_b
 
-            # C 机单机跟踪
-            start_time_c = time.time()
-            out_c, max_score_c, response_APCE_c = tracker3.Fusetrack(image_c, info_c)
-            time_c = time.time() - start_time_c
+                start_time_c = time.time()
+                candidate_c = tracker3.pcum_local_candidate(image_c)
+                local_time_c = time.time() - start_time_c
 
-            score_a_val = _to_float(max_score_a)
-            score_b_val = _to_float(max_score_b)
-            score_c_val = _to_float(max_score_c)
+                candidates = [candidate_a, candidate_b, candidate_c]
 
-            apce_a_val = _to_float(response_APCE_a)
-            apce_b_val = _to_float(response_APCE_b)
-            apce_c_val = _to_float(response_APCE_c)
+                remote_prompts_a, remote_state_a = _remote_inputs_for(0, candidates, tracker)
+                remote_prompts_b, remote_state_b = _remote_inputs_for(1, candidates, tracker2)
+                remote_prompts_c, remote_state_c = _remote_inputs_for(2, candidates, tracker3)
 
-            payload_a = _payload(out_a, score_a_val, apce_a_val)
-            payload_b = _payload(out_b, score_b_val, apce_b_val)
-            payload_c = _payload(out_c, score_c_val, apce_c_val)
+                start_time_a = time.time()
+                out_a, max_score_a, response_APCE_a = tracker.pcum_track_with_remote(
+                    image_a,
+                    info=info_a,
+                    remote_prompts=remote_prompts_a,
+                    remote_states=remote_state_a,
+                    local_candidate=candidate_a,
+                    debug_name="a"
+                )
+                time_a = local_time_a + (time.time() - start_time_a)
 
-            delivered_payloads = _exchange_messages(
-                frame_num,
-                {
-                    0: payload_a,
-                    1: payload_b,
-                    2: payload_c,
-                }
-            )
+                start_time_b = time.time()
+                out_b, max_score_b, response_APCE_b = tracker2.pcum_track_with_remote(
+                    image_b,
+                    info=info_b,
+                    remote_prompts=remote_prompts_b,
+                    remote_states=remote_state_b,
+                    local_candidate=candidate_b,
+                    debug_name="b"
+                )
+                time_b = local_time_b + (time.time() - start_time_b)
 
-            if coop_enabled:
-                peer_payloads_a = delivered_payloads[0] if coop_fusion == "prompt" else []
-                peer_payloads_b = delivered_payloads[1] if coop_fusion == "prompt" else []
-                peer_payloads_c = delivered_payloads[2] if coop_fusion == "prompt" else []
+                start_time_c = time.time()
+                out_c, max_score_c, response_APCE_c = tracker3.pcum_track_with_remote(
+                    image_c,
+                    info=info_c,
+                    remote_prompts=remote_prompts_c,
+                    remote_states=remote_state_c,
+                    local_candidate=candidate_c,
+                    debug_name="c"
+                )
+                time_c = local_time_c + (time.time() - start_time_c)
+
+                score_a_val = _to_float(max_score_a)
+                score_b_val = _to_float(max_score_b)
+                score_c_val = _to_float(max_score_c)
+
+                apce_a_val = _to_float(response_APCE_a)
+                apce_b_val = _to_float(response_APCE_b)
+                apce_c_val = _to_float(response_APCE_c)
+
+                payload_a = _payload(out_a, score_a_val, apce_a_val)
+                payload_b = _payload(out_b, score_b_val, apce_b_val)
+                payload_c = _payload(out_c, score_c_val, apce_c_val)
+                _exchange_messages(frame_num, {0: payload_a, 1: payload_b, 2: payload_c})
+
             else:
-                peer_payloads_a = [payload_b, payload_c]
-                peer_payloads_b = [payload_a, payload_c]
-                peer_payloads_c = [payload_a, payload_b]
+                # A 机单机跟踪
+                start_time_a = time.time()
+                out_a, max_score_a, response_APCE_a = tracker.Fusetrack(image_a, info_a)
+                time_a = time.time() - start_time_a
 
-            out_a, score_a_val, apce_a_val = _maybe_prompt_refine(
-                tracker, image_a, info_a, out_a, score_a_val, apce_a_val,
-                peer_payloads_a
-            )
-            out_b, score_b_val, apce_b_val = _maybe_prompt_refine(
-                tracker2, image_b, info_b, out_b, score_b_val, apce_b_val,
-                peer_payloads_b
-            )
-            out_c, score_c_val, apce_c_val = _maybe_prompt_refine(
-                tracker3, image_c, info_c, out_c, score_c_val, apce_c_val,
-                peer_payloads_c
-            )
+                # B 机单机跟踪
+                start_time_b = time.time()
+                out_b, max_score_b, response_APCE_b = tracker2.Fusetrack(image_b, info_b)
+                time_b = time.time() - start_time_b
+
+                # C 机单机跟踪
+                start_time_c = time.time()
+                out_c, max_score_c, response_APCE_c = tracker3.Fusetrack(image_c, info_c)
+                time_c = time.time() - start_time_c
+
+                score_a_val = _to_float(max_score_a)
+                score_b_val = _to_float(max_score_b)
+                score_c_val = _to_float(max_score_c)
+
+                apce_a_val = _to_float(response_APCE_a)
+                apce_b_val = _to_float(response_APCE_b)
+                apce_c_val = _to_float(response_APCE_c)
+
+                payload_a = _payload(out_a, score_a_val, apce_a_val)
+                payload_b = _payload(out_b, score_b_val, apce_b_val)
+                payload_c = _payload(out_c, score_c_val, apce_c_val)
+
+                delivered_payloads = _exchange_messages(
+                    frame_num,
+                    {
+                        0: payload_a,
+                        1: payload_b,
+                        2: payload_c,
+                    }
+                )
+
+                if coop_enabled:
+                    peer_payloads_a = delivered_payloads[0] if coop_fusion == "prompt" else []
+                    peer_payloads_b = delivered_payloads[1] if coop_fusion == "prompt" else []
+                    peer_payloads_c = delivered_payloads[2] if coop_fusion == "prompt" else []
+                else:
+                    peer_payloads_a = [payload_b, payload_c]
+                    peer_payloads_b = [payload_a, payload_c]
+                    peer_payloads_c = [payload_a, payload_b]
+
+                out_a, score_a_val, apce_a_val = _maybe_prompt_refine(
+                    tracker, image_a, info_a, out_a, score_a_val, apce_a_val,
+                    peer_payloads_a
+                )
+                out_b, score_b_val, apce_b_val = _maybe_prompt_refine(
+                    tracker2, image_b, info_b, out_b, score_b_val, apce_b_val,
+                    peer_payloads_b
+                )
+                out_c, score_c_val, apce_c_val = _maybe_prompt_refine(
+                    tracker3, image_c, info_c, out_c, score_c_val, apce_c_val,
+                    peer_payloads_c
+                )
 
             prev_output_a = OrderedDict(out_a)
             prev_output_b = OrderedDict(out_b)
