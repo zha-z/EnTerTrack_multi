@@ -418,6 +418,8 @@ class PCUMShapeTest(unittest.TestCase):
         self.assertEqual(local_cfg.TEST.PCUM.LOCAL_LOW_MODE, "apce")
         self.assertTrue(local_cfg.TEST.PCUM.MOTION_REDETECT_USE_LOCAL_CANDIDATE)
         self.assertAlmostEqual(local_cfg.TEST.PCUM.MOTION_REDETECT_LOCAL_MIN_GAIN, 0.02)
+        self.assertTrue(local_cfg.TEST.PCUM.KEEP_LOCAL_IF_REMOTE_CONFIDENCE_WORSE)
+        self.assertAlmostEqual(local_cfg.TEST.PCUM.REMOTE_CONFIDENCE_MAX_DROP, 0.02)
 
     def test_entertrack_pcum_is_wired_by_config(self):
         if importlib.util.find_spec("timm") is None:

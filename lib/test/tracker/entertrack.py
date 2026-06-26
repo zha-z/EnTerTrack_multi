@@ -523,6 +523,23 @@ class EnTeRTrack(BaseTracker):
                 remote_score = self._score_value(candidate["max_score"])
                 if remote_score + max_drop < local_score:
                     candidate = local_candidate
+                else:
+                    keep_confidence = bool(getattr(
+                        pcum_test_cfg,
+                        "KEEP_LOCAL_IF_REMOTE_CONFIDENCE_WORSE",
+                        False,
+                    ))
+                    confidence_drop = float(getattr(
+                        pcum_test_cfg,
+                        "REMOTE_CONFIDENCE_MAX_DROP",
+                        0.02,
+                    ))
+                    if (
+                        keep_confidence
+                        and self._candidate_confidence(candidate) + confidence_drop
+                        < self._candidate_confidence(local_candidate)
+                    ):
+                        candidate = local_candidate
 
         output = self._commit_candidate(candidate, info=info, debug_name=debug_name)
         return output, candidate["max_score"], candidate["apce"]
