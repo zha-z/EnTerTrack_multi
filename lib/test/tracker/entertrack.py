@@ -490,9 +490,14 @@ class EnTeRTrack(BaseTracker):
                     search_factor=search_factor,
                     return_score=True
                 )
+                local_min_gain = float(getattr(
+                    pcum_test_cfg,
+                    "MOTION_REDETECT_LOCAL_MIN_GAIN",
+                    0.0,
+                ))
                 if (
                     self._candidate_confidence(redetect_local_candidate)
-                    > self._candidate_confidence(local_candidate)
+                    > self._candidate_confidence(local_candidate) + local_min_gain
                 ):
                     local_candidate = redetect_local_candidate
 

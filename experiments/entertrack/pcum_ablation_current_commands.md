@@ -22,7 +22,7 @@ All configs in this group use the current stable training setup:
 | `pcum_ablation_current_a_weight` | Equal setup plus A-view loss weight `[1.6, 1.0, 1.0]` |
 | `pcum_ablation_current_dropout` | Equal setup plus remote dropout `0.3` |
 | `pcum_ablation_current_full` | A-view weight plus remote dropout, current recommended full setting |
-| `pcum_ablation_current_full_remote_motion_redetect` | Test-time remote prompt plus motion-guided redetection with a large-search local fallback; reuses the full checkpoint |
+| `pcum_ablation_current_full_remote_motion_redetect` | Test-time remote prompt plus motion-guided redetection with a large-search local fallback and `0.02` confidence gain threshold; reuses the full checkpoint |
 
 ## Train
 
