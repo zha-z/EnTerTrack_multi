@@ -701,6 +701,15 @@ class Tracker:
         output_a = {'target_bbox': [], 'time': [], 'max_score': [], 'APCE': []}
         output_b = {'target_bbox': [], 'time': [], 'max_score': [], 'APCE': []}
         output_c = {'target_bbox': [], 'time': [], 'max_score': [], 'APCE': []}
+        save_pcum_decision_log = bool(getattr(
+            getattr(tracker.cfg.TEST, "PCUM", None),
+            "SAVE_DECISION_LOG",
+            False,
+        ))
+        if save_pcum_decision_log:
+            output_a['pcum_decision'] = []
+            output_b['pcum_decision'] = []
+            output_c['pcum_decision'] = []
 
         if tracker.params.save_all_boxes:
             output_a['all_boxes'] = []
@@ -721,6 +730,9 @@ class Tracker:
 
         def _to_float(x):
             return x.item() if torch.is_tensor(x) else x
+
+        def _empty_pcum_decision():
+            return [0.0] * 8
 
         def _payload(out, score, apce):
             return {
@@ -1013,12 +1025,18 @@ class Tracker:
             'max_score': 0,
             'APCE': 0
         }
+
         init_default_c = {
             'target_bbox': init_info_c.get('init_bbox'),
             'time': time_c,
             'max_score': 0,
             'APCE': 0
         }
+
+        if save_pcum_decision_log:
+            init_default_a['pcum_decision'] = _empty_pcum_decision()
+            init_default_b['pcum_decision'] = _empty_pcum_decision()
+            init_default_c['pcum_decision'] = _empty_pcum_decision()
 
         if tracker.params.save_all_boxes:
             init_default_a['all_boxes'] = out_a['all_boxes']
@@ -1209,7 +1227,8 @@ class Tracker:
                 {
                     'time': time_a,
                     'max_score': score_a_val,
-                    'APCE': apce_a_val
+                    'APCE': apce_a_val,
+                    'pcum_decision': _empty_pcum_decision() if save_pcum_decision_log else None
                 }
             )
 
@@ -1219,7 +1238,8 @@ class Tracker:
                 {
                     'time': time_b,
                     'max_score': score_b_val,
-                    'APCE': apce_b_val
+                    'APCE': apce_b_val,
+                    'pcum_decision': _empty_pcum_decision() if save_pcum_decision_log else None
                 }
             )
 
@@ -1229,7 +1249,8 @@ class Tracker:
                 {
                     'time': time_c,
                     'max_score': score_c_val,
-                    'APCE': apce_c_val
+                    'APCE': apce_c_val,
+                    'pcum_decision': _empty_pcum_decision() if save_pcum_decision_log else None
                 }
             )
 

@@ -69,6 +69,12 @@ Offline trigger diagnosis from saved full-remote results:
 python tracking/analyze_pcum_motion_redetect.py --tracker_param pcum_ablation_current_full_remote --runid 201 --min_reliability 0.12 --local_low_mode apce --output_dir output/analysis/pcum_motion_redetect/full_remote_run201_low_apce
 ```
 
+Decision-log summary after running motion-redetect:
+
+```bash
+python tracking/analyze_pcum_decisions.py --tracker_param pcum_ablation_current_full_remote_motion_redetect --runid 202 --output_dir output/analysis/pcum_motion_redetect/decision_run202
+```
+
 ## Smoke Test
 
 ```bash

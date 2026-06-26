@@ -35,6 +35,10 @@ def _save_tracker_output(seq: Sequence, tracker: Tracker, output: dict):
         scores = np.array(data).astype(float)
         np.savetxt(file, scores, delimiter='\t', fmt='%.2f')
 
+    def save_float_matrix(file, data):
+        values = np.asarray(data, dtype=float)
+        np.savetxt(file, values, delimiter='\t', fmt='%.6f')
+
     def _convert_dict(input_dict):
         data_dict = {}
         for elem in input_dict:
@@ -112,6 +116,10 @@ def _save_tracker_output(seq: Sequence, tracker: Tracker, output: dict):
                 print("saving APCE...")
                 bbox_file = '{}_APCE.txt'.format(base_results_path)
                 save_score(bbox_file, data)
+
+        if key == 'pcum_decision':
+            decision_file = '{}_pcum_decision.txt'.format(base_results_path)
+            save_float_matrix(decision_file, data)
 
         elif key == 'time':
             if isinstance(data[0], dict):

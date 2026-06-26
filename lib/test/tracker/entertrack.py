@@ -477,6 +477,13 @@ class EnTeRTrack(BaseTracker):
 
         remote_prompts = [p for p in (remote_prompts or []) if p is not None]
         pcum_test_cfg = getattr(self.cfg.TEST, "PCUM", None)
+        save_decision = bool(getattr(pcum_test_cfg, "SAVE_DECISION_LOG", False))
+        redetect_triggered = search_factor is not None
+        local_source = 0.0
+        selected_source = 0.0
+        fallback_reason = 0.0
+        redetect_local_conf = -1.0
+        remote_candidate_conf = -1.0
 
         if search_factor is not None and local_candidate is not None:
             use_redetect_local = bool(getattr(
@@ -490,16 +497,19 @@ class EnTeRTrack(BaseTracker):
                     search_factor=search_factor,
                     return_score=True
                 )
+                redetect_local_conf = self._candidate_confidence(redetect_local_candidate)
                 local_min_gain = float(getattr(
                     pcum_test_cfg,
                     "MOTION_REDETECT_LOCAL_MIN_GAIN",
                     0.0,
                 ))
                 if (
-                    self._candidate_confidence(redetect_local_candidate)
+                    redetect_local_conf
                     > self._candidate_confidence(local_candidate) + local_min_gain
                 ):
                     local_candidate = redetect_local_candidate
+                    local_source = 1.0
+                    selected_source = local_source
 
         if len(remote_prompts) == 0:
             candidate = local_candidate or self._run_candidate(
@@ -507,6 +517,7 @@ class EnTeRTrack(BaseTracker):
                 search_factor=search_factor,
                 return_score=True
             )
+            fallback_reason = 1.0
         else:
             candidate = self._run_candidate(
                 image=image,
@@ -515,6 +526,8 @@ class EnTeRTrack(BaseTracker):
                 remote_states=remote_states,
                 return_score=True
             )
+            selected_source = 2.0
+            remote_candidate_conf = self._candidate_confidence(candidate)
 
             keep_local = bool(getattr(pcum_test_cfg, "KEEP_LOCAL_IF_REMOTE_WORSE", True))
             max_drop = float(getattr(pcum_test_cfg, "REMOTE_SCORE_MAX_DROP", 0.05))
@@ -523,6 +536,8 @@ class EnTeRTrack(BaseTracker):
                 remote_score = self._score_value(candidate["max_score"])
                 if remote_score + max_drop < local_score:
                     candidate = local_candidate
+                    selected_source = local_source
+                    fallback_reason = 2.0
                 else:
                     keep_confidence = bool(getattr(
                         pcum_test_cfg,
@@ -540,8 +555,22 @@ class EnTeRTrack(BaseTracker):
                         < self._candidate_confidence(local_candidate)
                     ):
                         candidate = local_candidate
+                        selected_source = local_source
+                        fallback_reason = 3.0
 
         output = self._commit_candidate(candidate, info=info, debug_name=debug_name)
+        if save_decision:
+            local_conf = self._candidate_confidence(local_candidate)
+            output["pcum_decision"] = [
+                float(redetect_triggered),
+                float(len(remote_prompts)),
+                float(selected_source),
+                float(fallback_reason),
+                float(local_conf),
+                float(redetect_local_conf),
+                float(remote_candidate_conf),
+                float(search_factor if search_factor is not None else -1.0),
+            ]
         return output, candidate["max_score"], candidate["apce"]
 
     def _track_single(
