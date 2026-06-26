@@ -22,6 +22,7 @@ All configs in this group use the current stable training setup:
 | `pcum_ablation_current_a_weight` | Equal setup plus A-view loss weight `[1.6, 1.0, 1.0]` |
 | `pcum_ablation_current_dropout` | Equal setup plus remote dropout `0.3` |
 | `pcum_ablation_current_full` | A-view weight plus remote dropout, current recommended full setting |
+| `pcum_ablation_current_full_remote_motion_redetect` | Test-time remote prompt plus motion-guided redetection; reuses the full checkpoint |
 
 ## Train
 
@@ -47,6 +48,25 @@ python tracking/test.py --tracker_name entertrack --tracker_param pcum_ablation_
 python tracking/test.py --tracker_name entertrack --tracker_param pcum_ablation_current_a_weight --dataset_name threemdot_test --runid 0 --threads 12 --num_gpus 6
 python tracking/test.py --tracker_name entertrack --tracker_param pcum_ablation_current_dropout --dataset_name threemdot_test --runid 0 --threads 12 --num_gpus 6
 python tracking/test.py --tracker_name entertrack --tracker_param pcum_ablation_current_full --dataset_name threemdot_test --runid 0 --threads 12 --num_gpus 6
+```
+
+Remote-prompt and motion-redetect testing with the experiment launcher:
+
+```bash
+RUNID_REMOTE=201 THREADS=12 NUM_GPUS=6 bash experiments.sh test_remote
+RUNID_MOTION=202 THREADS=12 NUM_GPUS=6 bash experiments.sh test_motion
+```
+
+Single-sequence smoke test for the motion-redetect path:
+
+```bash
+RUNID_SMOKE=302 bash experiments.sh smoke_motion
+```
+
+Offline trigger diagnosis from saved full-remote results:
+
+```bash
+python tracking/analyze_pcum_motion_redetect.py --tracker_param pcum_ablation_current_full_remote --runid 201 --min_reliability 0.12 --local_low_mode apce --output_dir output/analysis/pcum_motion_redetect/full_remote_run201_low_apce
 ```
 
 ## Smoke Test

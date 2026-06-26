@@ -2,11 +2,14 @@ import os
 import sys
 import argparse
 
-import cv2
-import os
+try:
+    import cv2
+except ModuleNotFoundError:
+    cv2 = None
 
-cv2.setNumThreads(0)
-cv2.ocl.setUseOpenCL(False)
+if cv2 is not None:
+    cv2.setNumThreads(0)
+    cv2.ocl.setUseOpenCL(False)
 
 import torch
 torch.set_num_threads(1)
@@ -67,4 +70,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

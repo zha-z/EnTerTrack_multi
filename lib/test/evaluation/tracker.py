@@ -4,7 +4,10 @@ import json
 from collections import OrderedDict
 from lib.test.evaluation.environment import env_settings
 import time
-import cv2 as cv
+try:
+    import cv2 as cv
+except ModuleNotFoundError:
+    cv = None
 from lib.test.coop import CommunicationSimulator
 
 from lib.utils.lmdb_utils import decode_img
@@ -13,6 +16,60 @@ import numpy as np
 
 import copy
 import torch
+from PIL import Image
+
+
+def _pcum_bbox_motion(candidate):
+    """Return normalized center motion and scale ratio for one candidate."""
+    if candidate is None:
+        return None
+    prev_bbox = candidate.get("prev_bbox", None)
+    bbox = candidate.get("target_bbox", None)
+    if prev_bbox is None or bbox is None:
+        return None
+
+    prev = np.asarray(prev_bbox, dtype=np.float32).reshape(-1)
+    curr = np.asarray(bbox, dtype=np.float32).reshape(-1)
+    if prev.shape[0] < 4 or curr.shape[0] < 4:
+        return None
+
+    prev_area = max(float(prev[2] * prev[3]), 1.0)
+    curr_area = max(float(curr[2] * curr[3]), 1.0)
+    prev_center = prev[:2] + 0.5 * prev[2:4]
+    curr_center = curr[:2] + 0.5 * curr[2:4]
+    norm_motion = float(np.linalg.norm(curr_center - prev_center) / max(prev_area ** 0.5, 1.0))
+    scale_ratio = float((curr_area / prev_area) ** 0.5)
+    return norm_motion, scale_ratio
+
+
+def _pcum_motion_reliability(candidate, max_norm_motion=2.0, apce_norm=200.0):
+    """
+    Conservative cross-view motion reliability.
+
+    This does not transfer peer coordinates across cameras. It only checks
+    whether a peer's own frame-to-frame motion is plausible and confident.
+    """
+    motion = _pcum_bbox_motion(candidate)
+    if motion is None:
+        return 0.0
+
+    norm_motion, scale_ratio = motion
+    max_norm_motion = max(float(max_norm_motion), 1e-6)
+    apce_norm = max(float(apce_norm), 1e-6)
+
+    score = candidate.get("max_score", candidate.get("score", 0.0))
+    if torch.is_tensor(score):
+        score = score.item()
+    apce = candidate.get("apce", 0.0)
+    if torch.is_tensor(apce):
+        apce = apce.item()
+    visible = 1.0 if candidate.get("visible", True) is not False else 0.0
+
+    score_conf = max(0.0, min(1.0, float(score)))
+    apce_conf = max(0.0, min(1.0, float(apce) / apce_norm))
+    motion_conf = max(0.0, 1.0 - norm_motion / max_norm_motion)
+    scale_conf = max(0.0, 1.0 - abs(np.log(max(scale_ratio, 1e-6))) / np.log(4.0))
+    return float(score_conf * apce_conf * motion_conf * scale_conf * visible)
 
 
 def trackerlist(name: str, parameter_name: str, dataset_name: str, run_ids = None, display_name: str = None,
@@ -139,6 +196,8 @@ class Tracker:
 
     def run_video(self, videofilepath, optional_box=None, debug=None, visdom_info=None, save_results=False):
         """Run the tracker with the vieofile."""
+        if cv is None:
+            raise ImportError("OpenCV is required for run_video().")
 
         params = self.get_parameters()
 
@@ -254,8 +313,10 @@ class Tracker:
 
     def _read_image(self, image_file: str):
         if isinstance(image_file, str):
-            im = cv.imread(image_file)
-            return cv.cvtColor(im, cv.COLOR_BGR2RGB)
+            if cv is not None:
+                im = cv.imread(image_file)
+                return cv.cvtColor(im, cv.COLOR_BGR2RGB)
+            return np.asarray(Image.open(image_file).convert("RGB"))
         elif isinstance(image_file, list) and len(image_file) == 2:
             return decode_img(image_file[0], image_file[1])
         else:
@@ -787,14 +848,37 @@ class Tracker:
         def _candidate_apce(candidate):
             return _to_float(candidate["apce"])
 
+        def _motion_reliability(candidate):
+            max_norm_motion = float(_get_cfg_value(
+                pcum_test_cfg, "MOTION_REDETECT_MAX_NORM_MOTION", 2.0))
+            apce_norm = float(_get_cfg_value(
+                pcum_test_cfg, "MOTION_REDETECT_APCE_NORM", 200.0))
+            return _pcum_motion_reliability(
+                candidate,
+                max_norm_motion=max_norm_motion,
+                apce_norm=apce_norm,
+            )
+
         def _candidate_is_local_low(candidate):
             score_thr = float(_get_cfg_value(pcum_test_cfg, "LOCAL_LOW_SCORE_THR", 0.25))
             apce_thr = float(_get_cfg_value(pcum_test_cfg, "LOCAL_LOW_APCE_THR", 100.0))
-            return _candidate_score(candidate) < score_thr or _candidate_apce(candidate) < apce_thr
+            low_score = _candidate_score(candidate) < score_thr
+            low_apce = _candidate_apce(candidate) < apce_thr
+            mode = str(_get_cfg_value(pcum_test_cfg, "LOCAL_LOW_MODE", "or")).lower()
+            if mode == "and":
+                return low_score and low_apce
+            if mode == "score":
+                return low_score
+            if mode == "apce":
+                return low_apce
+            return low_score or low_apce
 
         def _valid_remote_candidate(candidate):
             if candidate is None or candidate.get("local_prompt", None) is None:
                 return False
+            if bool(_get_cfg_value(pcum_test_cfg, "USE_REMOTE_VISIBLE_MASK", False)):
+                if candidate.get("visible", True) is False:
+                    return False
             score_thr = float(_get_cfg_value(pcum_test_cfg, "REMOTE_SCORE_THR", 0.0))
             apce_thr = float(_get_cfg_value(pcum_test_cfg, "REMOTE_APCE_THR", 0.0))
             return _candidate_score(candidate) >= score_thr and _candidate_apce(candidate) >= apce_thr
@@ -821,14 +905,71 @@ class Tracker:
                 max(0.0, min(1.0, float(_candidate_score(candidate))))
                 for candidate in peers
             ]
+            remote_visible = [
+                1.0 if candidate.get("visible", True) is not False else 0.0
+                for candidate in peers
+            ]
+            remote_confidence = [
+                remote_scores[i] * remote_visible[i]
+                for i in range(len(remote_scores))
+            ]
+            remote_motion = [_motion_reliability(candidate) for candidate in peers]
+            if bool(_get_cfg_value(pcum_test_cfg, "USE_MOTION_CONFIDENCE", False)):
+                remote_confidence = [
+                    remote_confidence[i] * (0.5 + 0.5 * remote_motion[i])
+                    for i in range(len(remote_confidence))
+                ]
             remote_state = {
                 "score": torch.tensor(
                     [sum(remote_scores) / max(1, len(remote_scores))],
                     device=target_device,
                     dtype=torch.float32
-                )
+                ),
+                "visible": torch.tensor(
+                    [sum(remote_visible) / max(1, len(remote_visible))],
+                    device=target_device,
+                    dtype=torch.float32
+                ),
+                "confidence": torch.tensor(
+                    [sum(remote_confidence) / max(1, len(remote_confidence))],
+                    device=target_device,
+                    dtype=torch.float32
+                ),
+                "motion_reliability": torch.tensor(
+                    [sum(remote_motion) / max(1, len(remote_motion))],
+                    device=target_device,
+                    dtype=torch.float32
+                ),
             }
             return remote_prompts, remote_state
+
+        def _motion_redetect_search_factor(target_index, candidates):
+            if not bool(_get_cfg_value(pcum_test_cfg, "USE_MOTION_REDETECT", False)):
+                return None
+            if not _candidate_is_local_low(candidates[target_index]):
+                return None
+
+            peers = [
+                candidate for i, candidate in enumerate(candidates)
+                if i != target_index and _valid_remote_candidate(candidate)
+            ]
+            min_remote = int(_get_cfg_value(
+                pcum_test_cfg, "MOTION_REDETECT_MIN_REMOTE",
+                _get_cfg_value(pcum_test_cfg, "MIN_REMOTE_PROMPTS", 1),
+            ))
+            min_reliability = float(_get_cfg_value(
+                pcum_test_cfg, "MOTION_REDETECT_MIN_RELIABILITY", 0.25))
+            reliable = [
+                candidate for candidate in peers
+                if _motion_reliability(candidate) >= min_reliability
+            ]
+            if len(reliable) < min_remote:
+                return None
+            return float(_get_cfg_value(
+                pcum_test_cfg,
+                "MOTION_REDETECT_SEARCH_FACTOR",
+                getattr(tracker.params, "search_factor", 4.0),
+            ))
 
         # ------------------------------------------------------------
         # 初始化：三个 tracker 分别初始化自己的视角
@@ -904,6 +1045,12 @@ class Tracker:
             info_a = seq_a.frame_info(frame_num)
             info_b = seq_b.frame_info(frame_num)
             info_c = seq_c.frame_info(frame_num)
+            if getattr(seq_a, "target_visible", None) is not None:
+                info_a["target_visible"] = bool(seq_a.target_visible[frame_num])
+            if getattr(seq_b, "target_visible", None) is not None:
+                info_b["target_visible"] = bool(seq_b.target_visible[frame_num])
+            if getattr(seq_c, "target_visible", None) is not None:
+                info_c["target_visible"] = bool(seq_c.target_visible[frame_num])
 
             info_a['previous_output'] = prev_output_a
             info_b['previous_output'] = prev_output_b
@@ -920,20 +1067,29 @@ class Tracker:
                 start_time_a = time.time()
                 candidate_a = tracker.pcum_local_candidate(image_a)
                 local_time_a = time.time() - start_time_a
+                candidate_a["prev_bbox"] = copy.deepcopy(tracker.state)
 
                 start_time_b = time.time()
                 candidate_b = tracker2.pcum_local_candidate(image_b)
                 local_time_b = time.time() - start_time_b
+                candidate_b["prev_bbox"] = copy.deepcopy(tracker2.state)
 
                 start_time_c = time.time()
                 candidate_c = tracker3.pcum_local_candidate(image_c)
                 local_time_c = time.time() - start_time_c
+                candidate_c["prev_bbox"] = copy.deepcopy(tracker3.state)
 
                 candidates = [candidate_a, candidate_b, candidate_c]
+                candidates[0]["visible"] = info_a.get("target_visible", True)
+                candidates[1]["visible"] = info_b.get("target_visible", True)
+                candidates[2]["visible"] = info_c.get("target_visible", True)
 
                 remote_prompts_a, remote_state_a = _remote_inputs_for(0, candidates, tracker)
                 remote_prompts_b, remote_state_b = _remote_inputs_for(1, candidates, tracker2)
                 remote_prompts_c, remote_state_c = _remote_inputs_for(2, candidates, tracker3)
+                redetect_factor_a = _motion_redetect_search_factor(0, candidates)
+                redetect_factor_b = _motion_redetect_search_factor(1, candidates)
+                redetect_factor_c = _motion_redetect_search_factor(2, candidates)
 
                 start_time_a = time.time()
                 out_a, max_score_a, response_APCE_a = tracker.pcum_track_with_remote(
@@ -942,6 +1098,7 @@ class Tracker:
                     remote_prompts=remote_prompts_a,
                     remote_states=remote_state_a,
                     local_candidate=candidate_a,
+                    search_factor=redetect_factor_a,
                     debug_name="a"
                 )
                 time_a = local_time_a + (time.time() - start_time_a)
@@ -953,6 +1110,7 @@ class Tracker:
                     remote_prompts=remote_prompts_b,
                     remote_states=remote_state_b,
                     local_candidate=candidate_b,
+                    search_factor=redetect_factor_b,
                     debug_name="b"
                 )
                 time_b = local_time_b + (time.time() - start_time_b)
@@ -964,6 +1122,7 @@ class Tracker:
                     remote_prompts=remote_prompts_c,
                     remote_states=remote_state_c,
                     local_candidate=candidate_c,
+                    search_factor=redetect_factor_c,
                     debug_name="c"
                 )
                 time_c = local_time_c + (time.time() - start_time_c)

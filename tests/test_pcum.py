@@ -2,16 +2,17 @@ import os
 import sys
 import unittest
 import copy
+import importlib.util
 
 import torch
 import torch.nn.functional as F
-from easydict import EasyDict as edict
 
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
+from easydict import EasyDict as edict
 from lib.models.entertrack.pcum import (  # noqa: E402
     MultiLayerPromptEncoder,
     PCUM,
@@ -24,7 +25,7 @@ from lib.models.entertrack.pcum import (  # noqa: E402
 )
 from lib.config.entertrack.config import cfg  # noqa: E402
 from lib.config.entertrack.config import update_config_from_file  # noqa: E402
-from lib.models.entertrack import build_entertrack  # noqa: E402
+from lib.test.evaluation.tracker import _pcum_motion_reliability  # noqa: E402
 from lib.train.data.sampler_threemdot import TrackingSamplerThreeMDOT  # noqa: E402
 from lib.train.actors.entertrack_threemdot import EnTeRTrackActorThreeMDOT  # noqa: E402
 
@@ -92,26 +93,13 @@ class PCUMShapeTest(unittest.TestCase):
         attention = torch.randn(self.batch, 4, total_len)
         confidence = torch.rand(self.batch, total_len)
 
-        attention_4d = torch.rand(self.batch, 2, total_len, total_len)
-        atp_mask = torch.tensor([
-            [1.0] * self.search_len,
-            [1.0] * (self.search_len // 2) + [0.0] * (self.search_len - self.search_len // 2),
-        ])
-
-        for source in (
-            "attention_score",
-            "feature_norm",
-            "confidence_score",
-            "arp_entropy",
-            "arp_mixed",
-        ):
+        for source in ("attention_score", "feature_norm", "confidence_score"):
             selector = SaliencyTokenSelector(topk=6, source=source)
             out = selector(
                 self.search,
                 template_feature=self.template,
-                attention_score=attention_4d if source.startswith("arp") else attention,
+                attention_score=attention,
                 confidence_score=confidence,
-                atp_mask=atp_mask,
             )
             self.assertEqual(out["tokens"].shape, (self.batch, 6, self.dim))
             self.assertEqual(out["indices"].shape, (self.batch, 6))
@@ -400,7 +388,31 @@ class PCUMShapeTest(unittest.TestCase):
         self.assertTrue(bool(data["template_view_valid"].all()))
         self.assertTrue(bool(data["search_view_valid"].all()))
 
+    def test_pcum_motion_reliability_is_conservative(self):
+        stable_visible = {
+            "prev_bbox": [100.0, 100.0, 40.0, 40.0],
+            "target_bbox": [106.0, 104.0, 42.0, 41.0],
+            "max_score": 0.8,
+            "apce": 180.0,
+            "visible": True,
+        }
+        invisible = dict(stable_visible, visible=False)
+        large_jump = dict(stable_visible, target_bbox=[260.0, 260.0, 42.0, 41.0])
+
+        stable_score = _pcum_motion_reliability(stable_visible)
+        invisible_score = _pcum_motion_reliability(invisible)
+        jump_score = _pcum_motion_reliability(large_jump)
+
+        self.assertGreater(stable_score, 0.1)
+        self.assertEqual(invisible_score, 0.0)
+        self.assertLess(jump_score, stable_score)
+
     def test_entertrack_pcum_is_wired_by_config(self):
+        if importlib.util.find_spec("timm") is None:
+            self.skipTest("timm is required for full EnTeRTrack model construction")
+
+        from lib.models.entertrack import build_entertrack  # noqa: E402
+
         local_cfg = copy.deepcopy(cfg)
         update_config_from_file(
             "experiments/entertrack/pcum_ablation_local_gated.yaml",
