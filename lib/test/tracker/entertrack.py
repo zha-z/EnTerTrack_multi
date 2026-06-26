@@ -437,6 +437,18 @@ class EnTeRTrack(BaseTracker):
     def _score_value(self, score):
         return score.item() if torch.is_tensor(score) else float(score)
 
+    def _candidate_confidence(self, candidate):
+        if candidate is None:
+            return 0.0
+        pcum_test_cfg = getattr(self.cfg.TEST, "PCUM", None)
+        apce_norm = max(
+            float(getattr(pcum_test_cfg, "MOTION_REDETECT_APCE_NORM", 200.0)),
+            1e-6
+        )
+        score = max(0.0, min(1.0, self._score_value(candidate["max_score"])))
+        apce = max(0.0, min(1.0, self._score_value(candidate["apce"]) / apce_norm))
+        return score * apce
+
     def pcum_local_candidate(self, image, search_factor=None):
         return self._run_candidate(
             image=image,
@@ -464,6 +476,26 @@ class EnTeRTrack(BaseTracker):
         self.frame_id += 1
 
         remote_prompts = [p for p in (remote_prompts or []) if p is not None]
+        pcum_test_cfg = getattr(self.cfg.TEST, "PCUM", None)
+
+        if search_factor is not None and local_candidate is not None:
+            use_redetect_local = bool(getattr(
+                pcum_test_cfg,
+                "MOTION_REDETECT_USE_LOCAL_CANDIDATE",
+                True,
+            ))
+            if use_redetect_local:
+                redetect_local_candidate = self._run_candidate(
+                    image=image,
+                    search_factor=search_factor,
+                    return_score=True
+                )
+                if (
+                    self._candidate_confidence(redetect_local_candidate)
+                    > self._candidate_confidence(local_candidate)
+                ):
+                    local_candidate = redetect_local_candidate
+
         if len(remote_prompts) == 0:
             candidate = local_candidate or self._run_candidate(
                 image=image,
@@ -479,7 +511,6 @@ class EnTeRTrack(BaseTracker):
                 return_score=True
             )
 
-            pcum_test_cfg = getattr(self.cfg.TEST, "PCUM", None)
             keep_local = bool(getattr(pcum_test_cfg, "KEEP_LOCAL_IF_REMOTE_WORSE", True))
             max_drop = float(getattr(pcum_test_cfg, "REMOTE_SCORE_MAX_DROP", 0.05))
             if keep_local and local_candidate is not None:

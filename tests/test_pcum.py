@@ -407,6 +407,17 @@ class PCUMShapeTest(unittest.TestCase):
         self.assertEqual(invisible_score, 0.0)
         self.assertLess(jump_score, stable_score)
 
+    def test_pcum_motion_redetect_config_loads(self):
+        local_cfg = copy.deepcopy(cfg)
+        update_config_from_file(
+            "experiments/entertrack/pcum_ablation_current_full_remote_motion_redetect.yaml",
+            base_cfg=local_cfg,
+        )
+
+        self.assertTrue(local_cfg.TEST.PCUM.USE_MOTION_REDETECT)
+        self.assertEqual(local_cfg.TEST.PCUM.LOCAL_LOW_MODE, "apce")
+        self.assertTrue(local_cfg.TEST.PCUM.MOTION_REDETECT_USE_LOCAL_CANDIDATE)
+
     def test_entertrack_pcum_is_wired_by_config(self):
         if importlib.util.find_spec("timm") is None:
             self.skipTest("timm is required for full EnTeRTrack model construction")
