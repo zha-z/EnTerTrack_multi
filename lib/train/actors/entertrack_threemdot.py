@@ -3,7 +3,12 @@ from . import BaseActor
 import torch
 import torch.nn.functional as F
 
-from lib.utils.box_ops import box_cxcywh_to_xyxy, box_xywh_to_xyxy
+from lib.utils.box_ops import (
+    box_cxcywh_to_xyxy,
+    box_xywh_to_xyxy,
+    giou_loss_details,
+    l1_loss_details,
+)
 from ...utils.heapmap_utils import generate_heatmap
 from ...utils.ce_utils import generate_mask_cond, adjust_keep_rate, adjust_temperature
 from lib.models.entertrack.pcum import PromptConsistencyLoss, build_pseudo_remote_prompts
@@ -34,6 +39,22 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
         self.prompt_consistency_loss = PromptConsistencyLoss(
             stop_gradient_teacher=self._get_cfg_value("TRAIN.PCUM.STOP_GRAD_TEACHER", True)
         )
+        self.paired_supervision_enabled = bool(
+            self._get_cfg_value("TRAIN.PCUM.PAIRED_SUPERVISION", False)
+        )
+        self._diagnostics_enabled = bool(
+            self._get_cfg_value("TRAIN.PCUM.DIAGNOSTICS_ENABLED", False)
+        )
+        self._diagnostic_active = False
+        self._diagnostic_stage = None
+        self._diagnostic_values = {}
+        self._diagnostic_local_residual = None
+        self._fusion_hook_handle = None
+        self._paired_cpu_rng_state = None
+        self._paired_cuda_rng_state = None
+        self._paired_cuda_device = None
+        if self._diagnostics_enabled:
+            self._register_fusion_diagnostic_hook()
 
     def __call__(self, data):
         """
@@ -69,6 +90,125 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
             node = getattr(node, key)
 
         return node
+
+    def _unwrap_network(self):
+        return self.net.module if hasattr(self.net, "module") else self.net
+
+    def _register_fusion_diagnostic_hook(self):
+        network = self._unwrap_network()
+        pcum = getattr(network, "pcum", None) if network is not None else None
+        fusion = getattr(pcum, "fusion", None)
+        if fusion is None or self._fusion_hook_handle is not None:
+            return
+
+        def _hook(_module, inputs, output):
+            if not self._diagnostic_active or self._diagnostic_stage is None:
+                return
+            search_tokens = inputs[0]
+            denominator = search_tokens.detach().float().norm().clamp_min(1e-12)
+            relative_change = (
+                (output.detach().float() - search_tokens.detach().float()).norm()
+                / denominator
+            ).item()
+            key = "%s_feature_relative_change" % self._diagnostic_stage
+            self._diagnostic_values[key] = float(relative_change)
+
+            fusion_residual = output.detach() - search_tokens.detach()
+            if self._diagnostic_stage == "local":
+                self._diagnostic_local_residual = fusion_residual
+            elif self._diagnostic_stage == "collaborative":
+                local_residual = self._diagnostic_local_residual
+                if local_residual is not None and local_residual.shape == fusion_residual.shape:
+                    incremental = (
+                        (fusion_residual.float() - local_residual.float()).norm()
+                        / search_tokens.detach().float().norm().clamp_min(1e-12)
+                    ).item()
+                    self._diagnostic_values["remote_incremental_feature_change"] = float(incremental)
+                self._diagnostic_local_residual = None
+
+        self._fusion_hook_handle = fusion.register_forward_hook(_hook)
+
+    def close_diagnostics(self):
+        if self._fusion_hook_handle is not None:
+            self._fusion_hook_handle.remove()
+            self._fusion_hook_handle = None
+        self._diagnostic_local_residual = None
+
+    def begin_paired_iteration(self, data, diagnostics_active=False):
+        self._update_flops_schedule(data["epoch"])
+        self._diagnostic_active = bool(self._diagnostics_enabled and diagnostics_active)
+        self._diagnostic_stage = None
+        self._diagnostic_values = {}
+        self._diagnostic_local_residual = None
+        self._capture_paired_forward_rng()
+
+    def _capture_paired_forward_rng(self):
+        self._paired_cpu_rng_state = torch.get_rng_state()
+        self._paired_cuda_rng_state = None
+        self._paired_cuda_device = None
+        network = self._unwrap_network()
+        if network is None:
+            return
+        parameter = next(network.parameters(), None)
+        if parameter is not None and parameter.is_cuda:
+            self._paired_cuda_device = parameter.device
+            self._paired_cuda_rng_state = torch.cuda.get_rng_state(parameter.device)
+
+    def _restore_paired_forward_rng(self):
+        if self._paired_cpu_rng_state is not None:
+            torch.set_rng_state(self._paired_cpu_rng_state)
+        if self._paired_cuda_rng_state is not None:
+            torch.cuda.set_rng_state(
+                self._paired_cuda_rng_state,
+                device=self._paired_cuda_device,
+            )
+        self._paired_cpu_rng_state = None
+        self._paired_cuda_rng_state = None
+        self._paired_cuda_device = None
+
+    def _set_diagnostic_stage(self, stage):
+        self._diagnostic_stage = stage if self._diagnostic_active else None
+
+    def collect_gradient_diagnostics(self):
+        if not self._diagnostic_active:
+            return {}
+
+        network = self._unwrap_network()
+        named_parameters = list(network.named_parameters())
+
+        def _grad_norm(prefix):
+            total = 0.0
+            found = False
+            for name, parameter in named_parameters:
+                if name.startswith(prefix) and parameter.grad is not None:
+                    value = parameter.grad.detach().float().norm().item()
+                    total += value * value
+                    found = True
+            return total ** 0.5 if found else 0.0
+
+        pcum = getattr(network, "pcum", None)
+        fusion = getattr(pcum, "fusion", None)
+        values = dict(self._diagnostic_values)
+        values.update({
+            "Grad/pcum_encoder": _grad_norm("pcum.encoder."),
+            "Grad/pcum_aligner": _grad_norm("pcum.aligner."),
+            "Grad/pcum_fusion_film": _grad_norm("pcum.fusion.film."),
+        })
+        if fusion is not None:
+            raw_scale = fusion.residual_scale.detach().float().item()
+            effective_scale = fusion._residual_scale().detach().float().item()
+            scale_grad = fusion.residual_scale.grad
+            values.update({
+                "PCUM/raw_residual_scale": float(raw_scale),
+                "PCUM/effective_residual_scale": float(effective_scale),
+                "Grad/residual_scale": 0.0 if scale_grad is None else float(
+                    scale_grad.detach().float().item()
+                ),
+            })
+        self._diagnostic_local_residual = None
+        self._diagnostic_stage = None
+        self._diagnostic_active = False
+        return values
 
     def _select_first_view(self, value):
         """
@@ -699,6 +839,254 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
         out["num_views"] = num_views
         return out
 
+    def _mark_flat_multiview(self, output, num_views):
+        output["pcum_flat_multiview"] = True
+        output["num_views"] = int(num_views)
+        return output
+
+    def paired_local_stage(self, data):
+        """Run the gradient-carrying local stage and cache detached references."""
+        num_views = min(self._num_views(data), 3)
+        if num_views < 3:
+            raise ValueError("Paired PCUM supervision requires three UAV views")
+
+        self._set_diagnostic_stage("local")
+        local_output = self._mark_flat_multiview(
+            self._forward_flat_views(self.net, data, num_views, remote_prompts=None),
+            num_views,
+        )
+        _, local_status, local_components = self.compute_losses(
+            local_output,
+            data,
+            include_auxiliary=False,
+            return_components=True,
+        )
+        local_per_sample = self._flat_per_sample_tracking_loss(
+            local_output, data, num_views)
+
+        local_prompt_flat = self._get_prompt_from_pred(local_output)
+        local_prompts = self._split_flat_prompts(local_prompt_flat, num_views)
+        if local_prompts is None or any(prompt is None for prompt in local_prompts):
+            raise RuntimeError("Local PCUM forward did not produce prompts")
+
+        local_weight = float(self._get_cfg_value(
+            "TRAIN.PCUM.LOCAL_LOSS_WEIGHT", 1.0))
+        collab_weight = float(self._get_cfg_value(
+            "TRAIN.PCUM.COLLAB_LOSS_WEIGHT", 1.0))
+        pair_denominator = local_weight + collab_weight
+        if pair_denominator <= 0:
+            raise ValueError("LOCAL_LOSS_WEIGHT + COLLAB_LOSS_WEIGHT must be positive")
+
+        backward_loss = local_components["tracking"] * (local_weight / pair_denominator)
+        cache = {
+            "num_views": num_views,
+            "remote_bank": [prompt.detach() for prompt in local_prompts],
+            "local_per_sample": local_per_sample["total"].detach(),
+            "local_tracking": local_components["tracking"].detach(),
+            "local_status": local_status,
+            "local_weight": local_weight,
+            "collab_weight": collab_weight,
+            "pair_denominator": pair_denominator,
+        }
+        return backward_loss, cache
+
+    def paired_collaborative_stage(self, data, cache):
+        """Run collaborative supervision using only detached remote prompts."""
+        num_views = int(cache["num_views"])
+        remote_prompts, remote_states = self._build_flat_remote_inputs(
+            data, cache["remote_bank"], num_views=num_views)
+        remote_active = remote_prompts is not None
+        self._restore_paired_forward_rng()
+
+        self._set_diagnostic_stage("collaborative")
+        collaborative_output = self._mark_flat_multiview(
+            self._forward_flat_views(
+                self.net,
+                data,
+                num_views,
+                remote_prompts=remote_prompts,
+                remote_states=remote_states,
+            ),
+            num_views,
+        )
+        _, collab_status, collab_components = self.compute_losses(
+            collaborative_output,
+            data,
+            include_auxiliary=True,
+            return_components=True,
+        )
+        collab_per_sample = self._flat_per_sample_tracking_loss(
+            collaborative_output, data, num_views)["total"]
+
+        remote_mask = torch.full_like(
+            collab_per_sample,
+            bool(remote_active),
+            dtype=torch.bool,
+        )
+        safe_loss, safe_stats = self.compute_safe_loss(
+            collaborative_per_sample=collab_per_sample,
+            local_per_sample=cache["local_per_sample"],
+            num_views=num_views,
+            margin=float(self._get_cfg_value("TRAIN.PCUM.SAFE_MARGIN", 0.0)),
+            hard_sample_quantile=float(self._get_cfg_value(
+                "TRAIN.PCUM.SAFE_HARD_SAMPLE_QUANTILE", 0.0)),
+            active_mask=remote_mask,
+        )
+
+        collab_factor = cache["collab_weight"] / cache["pair_denominator"]
+        safe_weight = float(self._get_cfg_value("TRAIN.PCUM.SAFE_LOSS_WEIGHT", 0.0))
+        backward_loss = (
+            collab_components["tracking"] * collab_factor
+            + safe_loss * safe_weight
+            + collab_components["auxiliary"]
+        )
+        pair_loss = (
+            cache["local_weight"] * cache["local_tracking"]
+            + cache["collab_weight"] * collab_components["tracking"].detach()
+        ) / cache["pair_denominator"]
+        total_for_log = (
+            pair_loss
+            + safe_loss.detach() * safe_weight
+            + collab_components["auxiliary"].detach()
+        )
+
+        local_status = cache["local_status"]
+        status = {
+            "Loss/total": float(total_for_log.item()),
+            "Loss/pair_tracking": float(pair_loss.item()),
+            "Loss/local_tracking": float(cache["local_tracking"].item()),
+            "Loss/collaborative_tracking": float(
+                collab_components["tracking"].detach().item()),
+            "Loss/safe": float(safe_loss.detach().item()),
+            "Loss/local_giou": float(local_status["Loss/giou"]),
+            "Loss/local_l1": float(local_status["Loss/l1"]),
+            "Loss/local_focal": float(local_status["Loss/location"]),
+            "Loss/collaborative_giou": float(collab_status["Loss/giou"]),
+            "Loss/collaborative_l1": float(collab_status["Loss/l1"]),
+            "Loss/collaborative_focal": float(collab_status["Loss/location"]),
+            "PCUM/collaborative_better_ratio": safe_stats["collaborative_better_ratio"],
+            "PCUM/loss_delta_mean": safe_stats["delta_mean"],
+            "PCUM/loss_delta_std": safe_stats["delta_std"],
+            "PCUM/loss_delta_min": safe_stats["delta_min"],
+            "PCUM/loss_delta_max": safe_stats["delta_max"],
+            "PCUM/remote_active": float(remote_active),
+            "PCUM/remote_dropout": float(not remote_active),
+            "PCUM/safe_margin": float(self._get_cfg_value("TRAIN.PCUM.SAFE_MARGIN", 0.0)),
+            "flops": float(collab_status.get("flops", 0.0)),
+            "flops_actual": float(collab_status.get("flops_actual", 0.0)),
+            "flops_target": float(collab_status.get("flops_target", self.F_target)),
+            "flops_weight": float(collab_status.get("flops_weight", self.flops_weight)),
+            "loss_prompt_align": float(collab_status.get("loss_prompt_align", 0.0)),
+            "pcum_real_multiview": 1.0,
+            "pcum_num_views": float(num_views),
+        }
+        view_weights = self._real_multiview_loss_weights(
+            num_views, collab_per_sample.device)
+        for view_index, view_weight in enumerate(view_weights):
+            status["pcum_view_weight_%d" % view_index] = float(
+                view_weight.detach().item())
+        return backward_loss, status
+
+    def _single_view_per_sample_tracking_loss(self, pred_dict, gt_dict, view_index):
+        gt_bbox = self._squeeze_if_needed(
+            self._select_view(gt_dict["search_anno"], view_index))
+        gt_maps = self._make_gt_heatmap(gt_bbox).to(pred_dict["score_map"].device)
+        pred_boxes = pred_dict["pred_boxes"]
+        batch_size, num_queries = pred_boxes.shape[:2]
+        pred_boxes_vec = box_cxcywh_to_xyxy(pred_boxes).view(-1, 4)
+        gt_boxes_vec = (
+            box_xywh_to_xyxy(gt_bbox)[:, None, :]
+            .repeat((1, num_queries, 1))
+            .view(-1, 4)
+            .clamp(min=0.0, max=1.0)
+            .to(pred_boxes_vec.device)
+        )
+
+        giou = giou_loss_details(pred_boxes_vec, gt_boxes_vec, batch_size)
+        l1 = l1_loss_details(pred_boxes_vec, gt_boxes_vec, batch_size)
+        focal_objective = self.objective["focal"]
+        if not hasattr(focal_objective, "loss_details"):
+            raise TypeError("Paired supervision requires FocalLoss.loss_details()")
+        focal = focal_objective.loss_details(pred_dict["score_map"], gt_maps)
+        total = (
+            self.loss_weight["giou"] * giou["per_sample"]
+            + self.loss_weight["l1"] * l1["per_sample"]
+            + self.loss_weight["focal"] * focal["per_sample"]
+        )
+        return {
+            "total": total,
+            "giou": giou["per_sample"],
+            "l1": l1["per_sample"],
+            "focal": focal["per_sample"],
+        }
+
+    def _flat_per_sample_tracking_loss(self, pred_dict, gt_dict, num_views):
+        total_batch = pred_dict["pred_boxes"].shape[0]
+        batch_size = total_batch // int(num_views)
+        per_view = []
+        for view_index in range(int(num_views)):
+            start = view_index * batch_size
+            end = (view_index + 1) * batch_size
+            per_view.append(self._single_view_per_sample_tracking_loss(
+                self._slice_flat_pred(pred_dict, start, end),
+                gt_dict,
+                view_index,
+            ))
+        return {
+            key: torch.cat([view[key] for view in per_view], dim=0)
+            for key in ("total", "giou", "l1", "focal")
+        }
+
+    def compute_safe_loss(self, collaborative_per_sample, local_per_sample,
+                          num_views, margin=0.0, hard_sample_quantile=0.0,
+                          active_mask=None):
+        if collaborative_per_sample.shape != local_per_sample.shape:
+            raise ValueError("Local and collaborative per-sample losses must match")
+        local_reference = local_per_sample.detach()
+        delta = collaborative_per_sample - local_reference
+        if active_mask is None:
+            active_mask = torch.ones_like(delta, dtype=torch.bool)
+        else:
+            active_mask = active_mask.to(device=delta.device, dtype=torch.bool)
+
+        num_views = int(num_views)
+        if delta.numel() % num_views != 0:
+            raise ValueError("Per-sample losses are not divisible by num_views")
+        batch_size = delta.numel() // num_views
+        view_weights = self._real_multiview_loss_weights(num_views, delta.device)
+        safe_loss = delta.sum() * 0.0
+        quantile = min(max(float(hard_sample_quantile), 0.0), 1.0)
+        for view_index in range(num_views):
+            start = view_index * batch_size
+            end = (view_index + 1) * batch_size
+            view_mask = active_mask[start:end]
+            if quantile > 0.0 and bool(view_mask.any().item()):
+                threshold = torch.quantile(local_reference[start:end][view_mask], quantile)
+                view_mask = view_mask & (local_reference[start:end] >= threshold)
+            if bool(view_mask.any().item()):
+                view_safe = torch.relu(delta[start:end][view_mask] + float(margin)).mean()
+                safe_loss = safe_loss + view_weights[view_index] * view_safe
+
+        active_delta = delta[active_mask]
+        if active_delta.numel() == 0:
+            stats = {
+                "collaborative_better_ratio": 0.0,
+                "delta_mean": 0.0,
+                "delta_std": 0.0,
+                "delta_min": 0.0,
+                "delta_max": 0.0,
+            }
+        else:
+            detached_delta = active_delta.detach().float()
+            stats = {
+                "collaborative_better_ratio": float((detached_delta < 0).float().mean().item()),
+                "delta_mean": float(detached_delta.mean().item()),
+                "delta_std": float(detached_delta.std(unbiased=False).item()),
+                "delta_min": float(detached_delta.min().item()),
+                "delta_max": float(detached_delta.max().item()),
+            }
+        return safe_loss, stats
+
     # ------------------------------------------------------------
     # Loss
     # ------------------------------------------------------------
@@ -731,13 +1119,21 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
             sliced[key] = self._slice_batch_value(value, start, end)
         return sliced
 
-    def _compute_flat_multiview_losses(self, pred_dict, gt_dict, return_status=True):
+    def _compute_flat_multiview_losses(self, pred_dict, gt_dict, return_status=True,
+                                       include_auxiliary=True,
+                                       return_components=False):
         num_views = int(pred_dict.get("num_views", 1))
         if num_views <= 1:
             pred_dict = dict(pred_dict)
             pred_dict.pop("pcum_flat_multiview", None)
             pred_dict.pop("num_views", None)
-            return self.compute_losses(pred_dict, gt_dict, return_status=return_status)
+            return self.compute_losses(
+                pred_dict,
+                gt_dict,
+                return_status=return_status,
+                include_auxiliary=include_auxiliary,
+                return_components=return_components,
+            )
 
         total_batch = pred_dict["pred_boxes"].shape[0]
         if total_batch % num_views != 0:
@@ -749,17 +1145,20 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
         batch_size = total_batch // num_views
         view_weights = None
         total_loss = None
+        component_totals = None
         status_acc = {}
 
         for view_index in range(num_views):
             start = view_index * batch_size
             end = (view_index + 1) * batch_size
             view_pred = self._slice_flat_pred(pred_dict, start, end)
-            view_loss, view_status = self.compute_losses(
+            view_loss, view_status, view_components = self.compute_losses(
                 view_pred,
                 gt_dict,
                 return_status=True,
                 view_index=view_index,
+                include_auxiliary=include_auxiliary,
+                return_components=True,
             )
 
             if view_weights is None:
@@ -770,11 +1169,23 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
 
             weighted_view_loss = view_loss * view_weights[view_index]
             total_loss = weighted_view_loss if total_loss is None else total_loss + weighted_view_loss
+            if component_totals is None:
+                component_totals = {
+                    key: value * view_weights[view_index]
+                    for key, value in view_components.items()
+                }
+            else:
+                for key, value in view_components.items():
+                    component_totals[key] = (
+                        component_totals[key] + value * view_weights[view_index]
+                    )
 
             for key, value in view_status.items():
                 status_acc[key] = status_acc.get(key, 0.0) + float(value)
 
         if not return_status:
+            if return_components:
+                return total_loss, component_totals
             return total_loss
 
         status = {key: value / float(num_views) for key, value in status_acc.items()}
@@ -783,14 +1194,19 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
         if view_weights is not None:
             for i, weight in enumerate(view_weights):
                 status["pcum_view_weight_%d" % i] = float(weight.detach().item())
+        if return_components:
+            return total_loss, status, component_totals
         return total_loss, status
 
-    def compute_losses(self, pred_dict, gt_dict, return_status=True, view_index=0):
+    def compute_losses(self, pred_dict, gt_dict, return_status=True, view_index=0,
+                       include_auxiliary=True, return_components=False):
         if isinstance(pred_dict, dict) and pred_dict.get("pcum_flat_multiview", False):
             return self._compute_flat_multiview_losses(
                 pred_dict,
                 gt_dict,
                 return_status=return_status,
+                include_auxiliary=include_auxiliary,
+                return_components=return_components,
             )
 
         if isinstance(pred_dict, dict) and "multi_view" in pred_dict:
@@ -798,9 +1214,16 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
             status_acc = {}
             num_views = len(pred_dict["multi_view"])
             view_weights = None
+            component_totals = None
             for i, view_pred in enumerate(pred_dict["multi_view"]):
-                view_loss, view_status = self.compute_losses(
-                    view_pred, gt_dict, return_status=True, view_index=i)
+                view_loss, view_status, view_components = self.compute_losses(
+                    view_pred,
+                    gt_dict,
+                    return_status=True,
+                    view_index=i,
+                    include_auxiliary=include_auxiliary,
+                    return_components=True,
+                )
                 if view_weights is None:
                     view_weights = self._real_multiview_loss_weights(
                         num_views,
@@ -808,6 +1231,14 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
                     )
                 weighted_view_loss = view_loss * view_weights[i]
                 total_loss = weighted_view_loss if total_loss is None else total_loss + weighted_view_loss
+                if component_totals is None:
+                    component_totals = {
+                        key: value * view_weights[i]
+                        for key, value in view_components.items()
+                    }
+                else:
+                    for key, value in view_components.items():
+                        component_totals[key] = component_totals[key] + value * view_weights[i]
                 for key, value in view_status.items():
                     status_acc[key] = status_acc.get(key, 0.0) + float(value)
 
@@ -817,6 +1248,8 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
             if view_weights is not None:
                 for i, weight in enumerate(view_weights):
                     status["pcum_view_weight_%d" % i] = float(weight.detach().item())
+            if return_components:
+                return total_loss, status, component_totals
             return total_loss, status
 
         gt_bbox = self._select_view(gt_dict["search_anno"], view_index)
@@ -864,14 +1297,18 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
         else:
             location_loss = torch.tensor(0.0, device=l1_loss.device)
 
-        # --------------------------------------------------------
-        # FLOPs constraint loss
-        # --------------------------------------------------------
+        tracking_loss = (
+            self.loss_weight["giou"] * giou_loss
+            + self.loss_weight["l1"] * l1_loss
+            + self.loss_weight["focal"] * location_loss
+        )
+
+        # Auxiliary losses are applied only to the collaborative stage.
         flops_constraint_loss = torch.tensor(0.0, device=l1_loss.device)
         layer_kept = torch.tensor(0.0, device=l1_loss.device)
         flops_actual = torch.tensor(0.0, device=l1_loss.device)
 
-        if "atp_masks" in pred_dict and pred_dict["atp_masks"]:
+        if include_auxiliary and "atp_masks" in pred_dict and pred_dict["atp_masks"]:
             layer_kept = pred_dict["atp_masks"][0].sum(dim=-1).mean(dim=0)
 
             flops_actual, hidden_dim = self.compute_flops_loss(
@@ -883,24 +1320,16 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
                 (flops_actual - self.F_target) / self.F_target
             )
 
-        # --------------------------------------------------------
-        # Total loss: tracking loss + FLOPs constraint
-        # --------------------------------------------------------
-        loss = (
-            self.loss_weight["giou"] * giou_loss
-            + self.loss_weight["l1"] * l1_loss
-            + self.loss_weight["focal"] * location_loss
-            + self.flops_weight * flops_constraint_loss
-        )
+        auxiliary_loss = self.flops_weight * flops_constraint_loss
 
-        prompt_gate_loss = torch.tensor(0.0, device=loss.device)
-        if "prompt_gate" in pred_dict:
+        prompt_gate_loss = torch.tensor(0.0, device=tracking_loss.device)
+        if include_auxiliary and "prompt_gate" in pred_dict:
             prompt_gate_weight = float(self._get_cfg_value("TRAIN.PROMPT_GATE_WEIGHT", 0.01))
             prompt_gate_loss = pred_dict["prompt_gate"].mean()
-            loss = loss + prompt_gate_weight * prompt_gate_loss
+            auxiliary_loss = auxiliary_loss + prompt_gate_weight * prompt_gate_loss
 
-        prompt_align_loss = torch.tensor(0.0, device=loss.device)
-        if self._get_cfg_value("MODEL.PCUM.ENABLED", False):
+        prompt_align_loss = torch.tensor(0.0, device=tracking_loss.device)
+        if include_auxiliary and self._get_cfg_value("MODEL.PCUM.ENABLED", False):
             local_prompt = self._get_prompt_from_pred(pred_dict)
             if local_prompt is not None:
                 remote_prompt = self._get_remote_prompt_from_pred(pred_dict)
@@ -913,7 +1342,13 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
                         "TRAIN.PCUM.ALIGN_LOSS_WEIGHT",
                         self._get_cfg_value("TRAIN.PCUM_CONSIST_WEIGHT", 0.0)
                     ))
-                    loss = loss + align_weight * prompt_align_loss
+                    auxiliary_loss = auxiliary_loss + align_weight * prompt_align_loss
+
+        loss = tracking_loss + auxiliary_loss
+        components = {
+            "tracking": tracking_loss,
+            "auxiliary": auxiliary_loss,
+        }
 
         if return_status:
             mean_iou = iou.detach().mean()
@@ -945,8 +1380,12 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
                 "IoU": mean_iou.item(),
             }
 
+            if return_components:
+                return loss, status, components
             return loss, status
 
+        if return_components:
+            return loss, components
         return loss
 
     # ------------------------------------------------------------

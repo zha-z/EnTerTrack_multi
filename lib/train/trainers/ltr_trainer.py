@@ -1,5 +1,6 @@
 import os
 import datetime
+from contextlib import nullcontext
 from collections import OrderedDict
 
 from lib.train.data.wandb_logger import WandbWriter
@@ -94,8 +95,15 @@ class LTRTrainer(BaseTrainer):
 
             data['epoch'] = self.epoch
             data['settings'] = self.settings
+            paired_training = bool(
+                loader.training
+                and getattr(self.actor, "paired_supervision_enabled", False)
+            )
+            if paired_training:
+                stats = self._paired_training_step(data, i)
+                loss = None
             # forward pass
-            if not self.use_amp:
+            elif not self.use_amp:
                 loss, stats = self.actor(data)
             else:
                 with autocast():
@@ -114,7 +122,7 @@ class LTRTrainer(BaseTrainer):
                         else:
                             print(f"{name}: None")
                     print("-" * 20)
-            if loader.training:
+            if loader.training and not paired_training:
                 self.optimizer.zero_grad()
                 if not self.use_amp:
                     # for name, param in self.actor.net.named_parameters():
@@ -162,12 +170,75 @@ class LTRTrainer(BaseTrainer):
                 if self.settings.local_rank in [-1, 0]:
                     self.wandb_writer.write_log(self.stats, self.epoch)
 
+            actor_cfg = getattr(self.actor, "cfg", None)
+            train_cfg = getattr(actor_cfg, "TRAIN", None)
+            max_iterations = int(getattr(train_cfg, "MAX_ITERS_PER_EPOCH", 0))
+            if max_iterations > 0 and i >= max_iterations:
+                break
+
         # calculate ETA after every epoch
         epoch_time = self.prev_time - self.start_time
         print("Epoch Time: " + str(datetime.timedelta(seconds=epoch_time)))
         print("Avg Data Time: %.5f" % (self.avg_date_time / self.num_frames * batch_size))
         print("Avg GPU Trans Time: %.5f" % (self.avg_gpu_trans_time / self.num_frames * batch_size))
         print("Avg Forward Time: %.5f" % (self.avg_forward_time / self.num_frames * batch_size))
+
+    def _paired_training_step(self, data, iteration):
+        diagnostics_interval = int(self.actor._get_cfg_value(
+            "TRAIN.PCUM.DIAGNOSTICS_INTERVAL", 50))
+        diagnostics_active = bool(
+            self.actor._get_cfg_value("TRAIN.PCUM.DIAGNOSTICS_ENABLED", False)
+            and diagnostics_interval > 0
+            and iteration % diagnostics_interval == 0
+        )
+        self.actor.begin_paired_iteration(data, diagnostics_active=diagnostics_active)
+        if diagnostics_active and torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats(self.device)
+        self.optimizer.zero_grad()
+
+        no_sync_context = (
+            self.actor.net.no_sync()
+            if hasattr(self.actor.net, "no_sync")
+            else nullcontext()
+        )
+        with no_sync_context:
+            if self.use_amp:
+                with autocast():
+                    local_loss, cache = self.actor.paired_local_stage(data)
+                self.scaler.scale(local_loss).backward()
+            else:
+                local_loss, cache = self.actor.paired_local_stage(data)
+                local_loss.backward()
+        del local_loss
+
+        if self.use_amp:
+            with autocast():
+                collaborative_loss, stats = self.actor.paired_collaborative_stage(
+                    data, cache)
+            self.scaler.scale(collaborative_loss).backward()
+            self.scaler.unscale_(self.optimizer)
+        else:
+            collaborative_loss, stats = self.actor.paired_collaborative_stage(
+                data, cache)
+            collaborative_loss.backward()
+        del collaborative_loss, cache
+
+        stats.update(self.actor.collect_gradient_diagnostics())
+        if diagnostics_active and torch.cuda.is_available():
+            stats["Memory/max_allocated_mb"] = float(
+                torch.cuda.max_memory_allocated(self.device) / (1024.0 ** 2)
+            )
+
+        if self.settings.grad_clip_norm > 0:
+            torch.nn.utils.clip_grad_norm_(
+                self.actor.net.parameters(), self.settings.grad_clip_norm)
+
+        if self.use_amp:
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+        else:
+            self.optimizer.step()
+        return stats
 
     def train_epoch(self):
         """Do one epoch for each loader."""

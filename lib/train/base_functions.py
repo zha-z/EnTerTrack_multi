@@ -6,6 +6,7 @@ from lib.train.dataset import Lasot_lmdb, Got10k_lmdb, MSCOCOSeq_lmdb, ImagenetV
 from lib.train.data import sampler, opencv_loader, processing, LTRLoader, sampler_threemdot
 import lib.train.data.transforms as tfm
 from lib.utils.misc import is_main_process
+from lib.train.optimizer_groups import build_optimizer_param_groups
 
 
 def update_settings(settings, cfg):
@@ -427,21 +428,9 @@ def get_optimizer_scheduler(net, cfg):
                 p.requires_grad = False
             else:
                 print(n)
-    else:                 # 设置更新哪些参数，之后从这改
-        param_dicts = [
-            {"params": [p for n, p in net.named_parameters() if "backbone" not in n and p.requires_grad],
-             "lr": cfg.TRAIN.LR * 0.1,},
-            {
-                "params": [p for n, p in net.named_parameters() if "backbone" in n and p.requires_grad],
-                # "params": [p for n, p in net.named_parameters() if "backbone" in n and p.requires_grad and "text" not in n],    # 去掉优化text
-                "lr": cfg.TRAIN.LR * cfg.TRAIN.BACKBONE_MULTIPLIER,
-            },
-        ]
-        if is_main_process():
-            print("Learnable parameters are shown below.")
-            for n, p in net.named_parameters():
-                if p.requires_grad:
-                    print(n)
+    else:
+        param_dicts = build_optimizer_param_groups(
+            net, cfg, verbose=is_main_process())
 
     if cfg.TRAIN.OPTIMIZER == "ADAMW":
         optimizer = torch.optim.AdamW(param_dicts, lr=cfg.TRAIN.LR,

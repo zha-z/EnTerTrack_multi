@@ -254,6 +254,20 @@ def run(settings):
 
     optimizer, lr_scheduler = get_optimizer_scheduler(net, cfg)
 
+    if settings.local_rank in [-1, 0]:
+        target_net = net.module if hasattr(net, "module") else net
+        pcum = getattr(target_net, "pcum", None)
+        print("Initialization checkpoint:", cfg.MODEL.PRETRAIN_FILE)
+        print("Optimizer state restored:", bool(getattr(cfg.TRAIN, "RESUME", False)))
+        print("Scheduler state restored:", bool(getattr(cfg.TRAIN, "RESUME", False)))
+        if pcum is not None:
+            raw_scale = pcum.fusion.residual_scale.detach().float().item()
+            effective_scale = pcum.fusion._residual_scale().detach().float().item()
+            print("Initial PCUM residual scale: raw=%.8f effective=%.8f" % (
+                raw_scale, effective_scale))
+            if getattr(pcum.fusion, "mode", None) == "film":
+                print("Film inactive parameters: pcum.fusion.gate, pcum.fusion.prompt_proj")
+
     use_amp = getattr(cfg.TRAIN, "AMP", False)
 
     trainer = LTRTrainer(

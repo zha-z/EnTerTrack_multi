@@ -12,6 +12,11 @@ class FocalLoss(nn.Module, ABC):
         self.beta = beta
 
     def forward(self, prediction, target):
+        details = self.loss_details(prediction, target)
+        return details["numerator"] / details["denominator"]
+
+    def loss_details(self, prediction, target):
+        """Return per-sample values plus the exact legacy batch reduction."""
         positive_index = target.eq(1).float()
         negative_index = target.lt(1).float()
 
@@ -23,16 +28,30 @@ class FocalLoss(nn.Module, ABC):
         negative_loss = torch.log(1 - prediction) * torch.pow(prediction,
                                                               self.alpha) * negative_weights * negative_index
 
-        num_positive = positive_index.float().sum()
-        positive_loss = positive_loss.sum()
-        negative_loss = negative_loss.sum()
+        reduce_dims = tuple(range(1, prediction.dim()))
+        positive_sum = positive_loss.sum(dim=reduce_dims)
+        negative_sum = negative_loss.sum(dim=reduce_dims)
+        positive_count = positive_index.sum(dim=reduce_dims)
 
-        if num_positive == 0:
-            loss = -negative_loss
-        else:
-            loss = -(positive_loss + negative_loss) / num_positive
-
-        return loss
+        per_sample_numerator = -(positive_sum + negative_sum)
+        per_sample_denominator = torch.where(
+            positive_count > 0,
+            positive_count,
+            torch.ones_like(positive_count),
+        )
+        total_positive = positive_count.sum()
+        denominator = torch.where(
+            total_positive > 0,
+            total_positive,
+            torch.ones_like(total_positive),
+        )
+        return {
+            "per_sample": per_sample_numerator / per_sample_denominator,
+            "per_sample_numerator": per_sample_numerator,
+            "per_sample_denominator": per_sample_denominator,
+            "numerator": per_sample_numerator.sum(),
+            "denominator": denominator,
+        }
 
 
 class LBHinge(nn.Module):

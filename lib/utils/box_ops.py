@@ -94,6 +94,34 @@ def giou_loss(boxes1, boxes2):
     return (1 - giou).mean(), iou
 
 
+def giou_loss_details(boxes1, boxes2, batch_size):
+    """Return per-sample GIoU loss while preserving the legacy reduction."""
+    giou, iou = generalized_box_iou(boxes1, boxes2)
+    losses = 1 - giou
+    if losses.numel() % int(batch_size) != 0:
+        raise ValueError("GIoU elements are not divisible by batch_size")
+    per_sample = losses.view(int(batch_size), -1).mean(dim=1)
+    return {
+        "per_sample": per_sample,
+        "numerator": losses.sum(),
+        "denominator": losses.new_tensor(float(losses.numel())),
+        "iou": iou,
+    }
+
+
+def l1_loss_details(prediction, target, batch_size):
+    """Return per-sample L1 loss and the legacy global mean components."""
+    losses = torch.abs(prediction - target)
+    if losses.numel() % int(batch_size) != 0:
+        raise ValueError("L1 elements are not divisible by batch_size")
+    per_sample = losses.view(int(batch_size), -1).mean(dim=1)
+    return {
+        "per_sample": per_sample,
+        "numerator": losses.sum(),
+        "denominator": losses.new_tensor(float(losses.numel())),
+    }
+
+
 def clip_box(box: list, H, W, margin=0):
     x1, y1, w, h = box
     x2, y2 = x1 + w, y1 + h

@@ -45,6 +45,9 @@ def run_training(script_name, config_name, cudnn_benchmark=True, local_rank=-1, 
             init_seeds(base_seed + local_rank)
         else:
             init_seeds(base_seed)
+        if local_rank in (-1, 0):
+            print("Training seed: %d (rank offset enabled: %s)" % (
+                base_seed, local_rank != -1))
 
     settings = ws_settings.Settings()
     settings.script_name = script_name
