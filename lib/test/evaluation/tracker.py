@@ -9,6 +9,11 @@ try:
 except ModuleNotFoundError:
     cv = None
 from lib.test.coop import CommunicationSimulator
+from lib.test.utils.pcum_diagnostics import (
+    build_frame_diagnostic_row,
+    prompt_cosine_similarity,
+    visibility_for_remote_selection,
+)
 
 from lib.utils.lmdb_utils import decode_img
 from pathlib import Path
@@ -676,9 +681,17 @@ class Tracker:
         tracker2 = self.create_tracker(params)
         tracker3 = self.create_tracker(params)
 
-        #output_a, output_b, output_c = self.Fuse_three_multi_track_matching_sequence(tracker, tracker2, tracker3, seq_a, seq_b,seq_c, init_info_a, init_info_b,init_info_c)       
-        output_a, output_b, output_c = self.Fuse_three_multi_track(tracker, tracker2, tracker3, seq_a, seq_b,seq_c, init_info_a, init_info_b,init_info_c)  
-        return output_a, output_b,output_c
+        try:
+            output_a, output_b, output_c = self.Fuse_three_multi_track(
+                tracker, tracker2, tracker3, seq_a, seq_b, seq_c,
+                init_info_a, init_info_b, init_info_c
+            )
+            return output_a, output_b, output_c
+        finally:
+            for active_tracker in (tracker, tracker2, tracker3):
+                close_diagnostics = getattr(active_tracker, "close_pcum_diagnostics", None)
+                if close_diagnostics is not None:
+                    close_diagnostics()
 
 
 # 三机融合结果，三模板无重检测
@@ -701,6 +714,25 @@ class Tracker:
         output_a = {'target_bbox': [], 'time': [], 'max_score': [], 'APCE': []}
         output_b = {'target_bbox': [], 'time': [], 'max_score': [], 'APCE': []}
         output_c = {'target_bbox': [], 'time': [], 'max_score': [], 'APCE': []}
+        diagnostics_cfg = getattr(
+            getattr(tracker.cfg.TEST, "PCUM", None),
+            "FRAME_DIAGNOSTICS",
+            None,
+        )
+        frame_diagnostics_enabled = bool(getattr(diagnostics_cfg, "ENABLED", False))
+        use_remote_visible_mask = bool(getattr(
+            getattr(tracker.cfg.TEST, "PCUM", None),
+            "USE_REMOTE_VISIBLE_MASK",
+            False,
+        ))
+        diagnostic_label = str(getattr(diagnostics_cfg, "LABEL", "")) or (
+            "reproduction_oracle_gt_visible_mask"
+            if use_remote_visible_mask else "formal_no_gt_mask"
+        )
+        if frame_diagnostics_enabled:
+            output_a['pcum_frame_diagnostics'] = []
+            output_b['pcum_frame_diagnostics'] = []
+            output_c['pcum_frame_diagnostics'] = []
         save_pcum_decision_log = bool(getattr(
             getattr(tracker.cfg.TEST, "PCUM", None),
             "SAVE_DECISION_LOG",
@@ -885,47 +917,64 @@ class Tracker:
                 return low_apce
             return low_score or low_apce
 
-        def _valid_remote_candidate(candidate):
+        def _valid_remote_candidate(candidate, visibility=None):
             if candidate is None or candidate.get("local_prompt", None) is None:
                 return False
-            if bool(_get_cfg_value(pcum_test_cfg, "USE_REMOTE_VISIBLE_MASK", False)):
-                if candidate.get("visible", True) is False:
+            if use_remote_visible_mask:
+                candidate_visible = (
+                    visibility if frame_diagnostics_enabled
+                    else candidate.get("visible", True)
+                )
+                if candidate_visible is False:
                     return False
             score_thr = float(_get_cfg_value(pcum_test_cfg, "REMOTE_SCORE_THR", 0.0))
             apce_thr = float(_get_cfg_value(pcum_test_cfg, "REMOTE_APCE_THR", 0.0))
             return _candidate_score(candidate) >= score_thr and _candidate_apce(candidate) >= apce_thr
 
-        def _remote_inputs_for(target_index, candidates, target_tracker):
+        def _remote_inputs_for(
+            target_index,
+            candidates,
+            target_tracker,
+            visibility_by_index=None,
+        ):
             if bool(_get_cfg_value(pcum_test_cfg, "USE_REMOTE_ONLY_WHEN_LOCAL_LOW", False)):
                 if not _candidate_is_local_low(candidates[target_index]):
-                    return [], None
+                    return [], None, []
 
             peers = [
-                candidate for i, candidate in enumerate(candidates)
-                if i != target_index and _valid_remote_candidate(candidate)
+                (i, candidate) for i, candidate in enumerate(candidates)
+                if i != target_index and _valid_remote_candidate(
+                    candidate,
+                    None if visibility_by_index is None else visibility_by_index[i],
+                )
             ]
             min_remote = int(_get_cfg_value(pcum_test_cfg, "MIN_REMOTE_PROMPTS", 1))
             if len(peers) < min_remote:
-                return [], None
+                return [], None, []
 
             target_device = target_tracker.output_window.device
             remote_prompts = [
                 candidate["local_prompt"].detach().to(device=target_device)
-                for candidate in peers
+                for _, candidate in peers
             ]
             remote_scores = [
                 max(0.0, min(1.0, float(_candidate_score(candidate))))
-                for candidate in peers
+                for _, candidate in peers
             ]
-            remote_visible = [
-                1.0 if candidate.get("visible", True) is not False else 0.0
-                for candidate in peers
-            ]
+            if frame_diagnostics_enabled:
+                # In formal mode no visibility annotation is read before inference.
+                # In oracle mode invisible peers have already been filtered out.
+                remote_visible = [1.0] * len(peers)
+            else:
+                remote_visible = [
+                    1.0 if candidate.get("visible", True) is not False else 0.0
+                    for _, candidate in peers
+                ]
             remote_confidence = [
                 remote_scores[i] * remote_visible[i]
                 for i in range(len(remote_scores))
             ]
-            remote_motion = [_motion_reliability(candidate) for candidate in peers]
+            remote_motion = [_motion_reliability(candidate) for _, candidate in peers]
             if bool(_get_cfg_value(pcum_test_cfg, "USE_MOTION_CONFIDENCE", False)):
                 remote_confidence = [
                     remote_confidence[i] * (0.5 + 0.5 * remote_motion[i])
@@ -953,7 +1002,65 @@ class Tracker:
                     dtype=torch.float32
                 ),
             }
-            return remote_prompts, remote_state
+            return remote_prompts, remote_state, [index for index, _ in peers]
+
+        uav_ids = ["A", "B", "C"]
+
+        def _frame_diagnostic_row(
+            frame_index,
+            target_index,
+            target_seq,
+            all_sequences,
+            target_tracker,
+            candidates,
+            participating_indices,
+        ):
+            tracker_diagnostic = target_tracker.last_pcum_diagnostic
+            peer_indices = [i for i in range(3) if i != target_index]
+            aligner = target_tracker.network.pcum.aligner
+            remote_confidences = {
+                uav_ids[i]: float(_candidate_score(candidates[i]))
+                for i in peer_indices
+            }
+            prompt_similarities = {
+                uav_ids[i]: prompt_cosine_similarity(
+                    candidates[target_index].get("local_prompt", None),
+                    candidates[i].get("local_prompt", None),
+                    aligner=aligner,
+                )
+                for i in peer_indices
+            }
+            remote_visibility_gt = {}
+            for i in peer_indices:
+                visibility = getattr(all_sequences[i], "target_visible", None)
+                remote_visibility_gt[uav_ids[i]] = (
+                    int(bool(visibility[frame_index])) if visibility is not None else None
+                )
+            remote_participated = {
+                uav_ids[i]: i in participating_indices for i in peer_indices
+            }
+            participating_uavs = [uav_ids[i] for i in participating_indices]
+
+            return build_frame_diagnostic_row(
+                diagnostic_label=diagnostic_label,
+                uses_gt_visible_mask=use_remote_visible_mask,
+                sequence_name=target_seq.name,
+                frame_id=frame_index,
+                current_uav=uav_ids[target_index],
+                remote_uav_ids=participating_uavs,
+                local=tracker_diagnostic["local"],
+                raw_collaborative=tracker_diagnostic["raw_collaborative"],
+                final=tracker_diagnostic["final"],
+                gt_bbox=target_seq.ground_truth_rect[frame_index],
+                previous_bbox=candidates[target_index].get("prev_bbox", None),
+                remote_confidences=remote_confidences,
+                prompt_similarities=prompt_similarities,
+                remote_visibility_gt=remote_visibility_gt,
+                remote_participated=remote_participated,
+                final_source=tracker_diagnostic["final_source"],
+                fallback_triggered=tracker_diagnostic["fallback_triggered"],
+                fallback_reason=tracker_diagnostic["fallback_reason"],
+            )
 
         def _motion_redetect_search_factor(target_index, candidates):
             if not bool(_get_cfg_value(pcum_test_cfg, "USE_MOTION_REDETECT", False)):
@@ -1033,6 +1140,34 @@ class Tracker:
             'APCE': 0
         }
 
+        if frame_diagnostics_enabled:
+            for init_default, seq, uav in (
+                (init_default_a, seq_a, "A"),
+                (init_default_b, seq_b, "B"),
+                (init_default_c, seq_c, "C"),
+            ):
+                init_bbox = init_default['target_bbox']
+                initial_snapshot = {
+                    "bbox": list(init_bbox),
+                    "score_max": float("nan"),
+                    "apce": float("nan"),
+                    "confidence": float("nan"),
+                    "response_entropy": float("nan"),
+                }
+                init_default['pcum_frame_diagnostics'] = build_frame_diagnostic_row(
+                    diagnostic_label=diagnostic_label,
+                    uses_gt_visible_mask=use_remote_visible_mask,
+                    sequence_name=seq.name,
+                    frame_id=0,
+                    current_uav=uav,
+                    remote_uav_ids=[],
+                    local=initial_snapshot,
+                    raw_collaborative=initial_snapshot,
+                    final=initial_snapshot,
+                    gt_bbox=seq.ground_truth_rect[0],
+                    final_source="initialization",
+                )
+
         if save_pcum_decision_log:
             init_default_a['pcum_decision'] = _empty_pcum_decision()
             init_default_b['pcum_decision'] = _empty_pcum_decision()
@@ -1063,23 +1198,28 @@ class Tracker:
             info_a = seq_a.frame_info(frame_num)
             info_b = seq_b.frame_info(frame_num)
             info_c = seq_c.frame_info(frame_num)
-            if getattr(seq_a, "target_visible", None) is not None:
-                info_a["target_visible"] = bool(seq_a.target_visible[frame_num])
-            if getattr(seq_b, "target_visible", None) is not None:
-                info_b["target_visible"] = bool(seq_b.target_visible[frame_num])
-            if getattr(seq_c, "target_visible", None) is not None:
-                info_c["target_visible"] = bool(seq_c.target_visible[frame_num])
+            diagnostic_row_a = None
+            diagnostic_row_b = None
+            diagnostic_row_c = None
+            if not frame_diagnostics_enabled:
+                if getattr(seq_a, "target_visible", None) is not None:
+                    info_a["target_visible"] = bool(seq_a.target_visible[frame_num])
+                if getattr(seq_b, "target_visible", None) is not None:
+                    info_b["target_visible"] = bool(seq_b.target_visible[frame_num])
+                if getattr(seq_c, "target_visible", None) is not None:
+                    info_c["target_visible"] = bool(seq_c.target_visible[frame_num])
 
             info_a['previous_output'] = prev_output_a
             info_b['previous_output'] = prev_output_b
             info_c['previous_output'] = prev_output_c
 
-            if len(seq_a.ground_truth_rect) > 1:
-                info_a['gt_bbox'] = seq_a.ground_truth_rect[frame_num]
-            if len(seq_b.ground_truth_rect) > 1:
-                info_b['gt_bbox'] = seq_b.ground_truth_rect[frame_num]
-            if len(seq_c.ground_truth_rect) > 1:
-                info_c['gt_bbox'] = seq_c.ground_truth_rect[frame_num]
+            if not frame_diagnostics_enabled:
+                if len(seq_a.ground_truth_rect) > 1:
+                    info_a['gt_bbox'] = seq_a.ground_truth_rect[frame_num]
+                if len(seq_b.ground_truth_rect) > 1:
+                    info_b['gt_bbox'] = seq_b.ground_truth_rect[frame_num]
+                if len(seq_c.ground_truth_rect) > 1:
+                    info_c['gt_bbox'] = seq_c.ground_truth_rect[frame_num]
 
             if pcum_remote_enabled:
                 start_time_a = time.time()
@@ -1098,13 +1238,26 @@ class Tracker:
                 candidate_c["prev_bbox"] = copy.deepcopy(tracker3.state)
 
                 candidates = [candidate_a, candidate_b, candidate_c]
-                candidates[0]["visible"] = info_a.get("target_visible", True)
-                candidates[1]["visible"] = info_b.get("target_visible", True)
-                candidates[2]["visible"] = info_c.get("target_visible", True)
+                visibility_for_selection = visibility_for_remote_selection(
+                    frame_diagnostics_enabled,
+                    use_remote_visible_mask,
+                    [seq_a, seq_b, seq_c],
+                    frame_num,
+                )
+                if not frame_diagnostics_enabled:
+                    candidates[0]["visible"] = info_a.get("target_visible", True)
+                    candidates[1]["visible"] = info_b.get("target_visible", True)
+                    candidates[2]["visible"] = info_c.get("target_visible", True)
 
-                remote_prompts_a, remote_state_a = _remote_inputs_for(0, candidates, tracker)
-                remote_prompts_b, remote_state_b = _remote_inputs_for(1, candidates, tracker2)
-                remote_prompts_c, remote_state_c = _remote_inputs_for(2, candidates, tracker3)
+                remote_prompts_a, remote_state_a, remote_indices_a = _remote_inputs_for(
+                    0, candidates, tracker, visibility_for_selection
+                )
+                remote_prompts_b, remote_state_b, remote_indices_b = _remote_inputs_for(
+                    1, candidates, tracker2, visibility_for_selection
+                )
+                remote_prompts_c, remote_state_c, remote_indices_c = _remote_inputs_for(
+                    2, candidates, tracker3, visibility_for_selection
+                )
                 redetect_factor_a = _motion_redetect_search_factor(0, candidates)
                 redetect_factor_b = _motion_redetect_search_factor(1, candidates)
                 redetect_factor_c = _motion_redetect_search_factor(2, candidates)
@@ -1152,6 +1305,21 @@ class Tracker:
                 apce_a_val = _to_float(response_APCE_a)
                 apce_b_val = _to_float(response_APCE_b)
                 apce_c_val = _to_float(response_APCE_c)
+
+                if frame_diagnostics_enabled:
+                    all_sequences = [seq_a, seq_b, seq_c]
+                    diagnostic_row_a = _frame_diagnostic_row(
+                        frame_num, 0, seq_a, all_sequences, tracker,
+                        candidates, remote_indices_a
+                    )
+                    diagnostic_row_b = _frame_diagnostic_row(
+                        frame_num, 1, seq_b, all_sequences, tracker2,
+                        candidates, remote_indices_b
+                    )
+                    diagnostic_row_c = _frame_diagnostic_row(
+                        frame_num, 2, seq_c, all_sequences, tracker3,
+                        candidates, remote_indices_c
+                    )
 
                 payload_a = _payload(out_a, score_a_val, apce_a_val)
                 payload_b = _payload(out_b, score_b_val, apce_b_val)
@@ -1228,7 +1396,8 @@ class Tracker:
                     'time': time_a,
                     'max_score': score_a_val,
                     'APCE': apce_a_val,
-                    'pcum_decision': _empty_pcum_decision() if save_pcum_decision_log else None
+                    'pcum_decision': _empty_pcum_decision() if save_pcum_decision_log else None,
+                    'pcum_frame_diagnostics': diagnostic_row_a,
                 }
             )
 
@@ -1239,7 +1408,8 @@ class Tracker:
                     'time': time_b,
                     'max_score': score_b_val,
                     'APCE': apce_b_val,
-                    'pcum_decision': _empty_pcum_decision() if save_pcum_decision_log else None
+                    'pcum_decision': _empty_pcum_decision() if save_pcum_decision_log else None,
+                    'pcum_frame_diagnostics': diagnostic_row_b,
                 }
             )
 
@@ -1250,7 +1420,8 @@ class Tracker:
                     'time': time_c,
                     'max_score': score_c_val,
                     'APCE': apce_c_val,
-                    'pcum_decision': _empty_pcum_decision() if save_pcum_decision_log else None
+                    'pcum_decision': _empty_pcum_decision() if save_pcum_decision_log else None,
+                    'pcum_frame_diagnostics': diagnostic_row_c,
                 }
             )
 

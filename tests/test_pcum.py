@@ -6,8 +6,12 @@ import importlib.util
 import tempfile
 import contextlib
 import io
+import csv
+import json
+import math
 
 import torch
+from torch import nn
 import torch.nn.functional as F
 
 
@@ -29,7 +33,16 @@ from lib.models.entertrack.pcum import (  # noqa: E402
 from lib.config.entertrack.config import cfg  # noqa: E402
 from lib.config.entertrack.config import update_config_from_file  # noqa: E402
 from lib.test.evaluation.tracker import _pcum_motion_reliability  # noqa: E402
+from lib.test.evaluation.tracker import Tracker as EvaluationTracker  # noqa: E402
 from lib.test.evaluation.running import run_three_multi_sequence  # noqa: E402
+from lib.test.evaluation.running import _save_tracker_output  # noqa: E402
+from lib.test.utils.pcum_diagnostics import (  # noqa: E402
+    PCUMDiagnosticHooks,
+    build_frame_diagnostic_row,
+    diagnostic_filename,
+    normalized_response_entropy,
+    visibility_for_remote_selection,
+)
 from lib.train.data.sampler_threemdot import TrackingSamplerThreeMDOT  # noqa: E402
 from lib.train.actors.entertrack_threemdot import EnTeRTrackActorThreeMDOT  # noqa: E402
 
@@ -513,6 +526,234 @@ class PCUMShapeTest(unittest.TestCase):
         )
         baseline = build_entertrack(base_cfg, training=False)
         self.assertIsNone(baseline.pcum)
+
+    def test_diagnostics_disabled_is_elementwise_transparent(self):
+        network = nn.Module()
+        network.pcum = PCUM(
+            token_dim=self.dim,
+            prompt_dim=self.dim,
+            num_prompts=4,
+            topk=8,
+            fusion_mode="gated_add",
+            enabled=True,
+        )
+        remote = torch.randn(self.batch, 4, self.dim)
+        before = network.pcum(
+            {"search": self.search, "template": self.template},
+            remote_prompts=remote,
+        )["search_tokens"]
+
+        hooks = PCUMDiagnosticHooks(network, enabled=False)
+        after = network.pcum(
+            {"search": self.search, "template": self.template},
+            remote_prompts=remote,
+        )["search_tokens"]
+
+        self.assertEqual(hooks.handle_count, 0)
+        self.assertTrue(torch.equal(before, after))
+
+    def test_diagnostics_enabled_does_not_change_prediction(self):
+        network = nn.Module()
+        network.pcum = PCUM(
+            token_dim=self.dim,
+            prompt_dim=self.dim,
+            num_prompts=4,
+            topk=8,
+            fusion_mode="gated_add",
+            enabled=True,
+        )
+        remote = torch.randn(self.batch, 4, self.dim)
+        before = network.pcum(
+            {"search": self.search, "template": self.template},
+            remote_prompts=remote,
+        )["search_tokens"]
+
+        hooks = PCUMDiagnosticHooks(network, enabled=True)
+        after = network.pcum(
+            {"search": self.search, "template": self.template},
+            remote_prompts=remote,
+        )["search_tokens"]
+        stats = hooks.snapshot()
+
+        self.assertTrue(torch.equal(before, after))
+        self.assertTrue(math.isfinite(stats["alignment_gate_mean"]))
+        self.assertTrue(math.isfinite(stats["fusion_gate_mean"]))
+        hooks.remove()
+
+    def test_formal_diagnostics_do_not_access_gt_visibility(self):
+        class NoVisibilityAccess:
+            @property
+            def target_visible(self):
+                raise AssertionError("formal inference accessed GT visibility")
+
+        sequences = [NoVisibilityAccess(), NoVisibilityAccess(), NoVisibilityAccess()]
+        selected = visibility_for_remote_selection(True, False, sequences, 3)
+        self.assertIsNone(selected)
+
+    def test_diagnostic_hooks_are_removed(self):
+        network = nn.Module()
+        network.pcum = PCUM(
+            token_dim=self.dim,
+            prompt_dim=self.dim,
+            fusion_mode="gated_add",
+            enabled=True,
+        )
+        hooks = PCUMDiagnosticHooks(network, enabled=True)
+        self.assertEqual(hooks.handle_count, 2)
+        hooks.remove()
+        self.assertEqual(hooks.handle_count, 0)
+        self.assertEqual(len(network.pcum.aligner._forward_hooks), 0)
+        self.assertEqual(len(network.pcum.fusion.gate._forward_hooks), 0)
+
+    def test_sequence_wrapper_removes_each_tracker_hook(self):
+        class SequenceStub:
+            def init_info(self):
+                return {"init_bbox": [0, 0, 10, 10]}
+
+        class ActiveTrackerStub:
+            def __init__(self):
+                self.closed = False
+
+            def close_pcum_diagnostics(self):
+                self.closed = True
+
+        wrapper = EvaluationTracker.__new__(EvaluationTracker)
+        wrapper.get_parameters = lambda: edict({"debug": 0})
+        active = [ActiveTrackerStub(), ActiveTrackerStub(), ActiveTrackerStub()]
+        wrapper.create_tracker = lambda params: active.pop(0)
+        created = []
+
+        def fake_track(tracker_a, tracker_b, tracker_c, *args):
+            created.extend([tracker_a, tracker_b, tracker_c])
+            return {}, {}, {}
+
+        wrapper.Fuse_three_multi_track = fake_track
+        sequence = SequenceStub()
+        EvaluationTracker.Fuse_three_multi_run_sequence(
+            wrapper, sequence, sequence, sequence, debug=False
+        )
+        self.assertTrue(all(tracker.closed for tracker in created))
+
+    def test_three_uav_diagnostic_fields_do_not_shift(self):
+        rows = []
+        for index, uav in enumerate(("A", "B", "C")):
+            bbox = [10.0 * index, 0.0, 10.0, 10.0]
+            snapshot = {"bbox": bbox, "confidence": 0.5, "score_max": 0.5, "apce": 100.0}
+            rows.append(build_frame_diagnostic_row(
+                diagnostic_label="formal_no_gt_mask",
+                uses_gt_visible_mask=False,
+                sequence_name="case-{}".format(index + 1),
+                frame_id=1,
+                current_uav=uav,
+                remote_uav_ids=[peer for peer in ("A", "B", "C") if peer != uav],
+                local=snapshot,
+                raw_collaborative=snapshot,
+                final=snapshot,
+                gt_bbox=bbox,
+                final_source="raw_collaborative",
+            ))
+
+        self.assertEqual([row["current_uav"] for row in rows], ["A", "B", "C"])
+        self.assertEqual([row["sequence_name"] for row in rows], ["case-1", "case-2", "case-3"])
+        self.assertTrue(all(row["local_iou"] == 1.0 for row in rows))
+
+    def test_multi_remote_json_fields_round_trip(self):
+        snapshot = {"bbox": [1, 2, 3, 4], "confidence": 0.5, "score_max": 0.5, "apce": 100.0}
+        row = build_frame_diagnostic_row(
+            diagnostic_label="formal_no_gt_mask",
+            uses_gt_visible_mask=False,
+            sequence_name="case-1",
+            frame_id=1,
+            current_uav="A",
+            remote_uav_ids=["B", "C"],
+            local=snapshot,
+            raw_collaborative=snapshot,
+            final=snapshot,
+            gt_bbox=[1, 2, 3, 4],
+            remote_confidences={"B": 0.76, "C": 0.31},
+            prompt_similarities={"B": 0.68, "C": 0.42},
+            remote_visibility_gt={"B": 1, "C": 0},
+            remote_participated={"B": True, "C": True},
+        )
+
+        with tempfile.TemporaryDirectory(dir="/tmp") as results_dir:
+            tracker = FakeTrackerInfo(results_dir, save_decision_log=False)
+            seq = FakeSequence("case-1")
+            _save_tracker_output(seq, tracker, {"pcum_frame_diagnostics": [row]})
+            path = os.path.join(
+                results_dir,
+                diagnostic_filename("entertrack", "fake", 0, "case-1", "A"),
+            )
+            with open(path, newline="") as fh:
+                loaded = next(csv.DictReader(fh))
+
+        self.assertEqual(json.loads(loaded["remote_confidences"]), {"B": 0.76, "C": 0.31})
+        self.assertEqual(json.loads(loaded["remote_visibility_gt"]), {"B": 1, "C": 0})
+
+    def test_film_diagnostics_and_matching_configs(self):
+        oracle_cfg = copy.deepcopy(cfg)
+        formal_cfg = copy.deepcopy(cfg)
+        update_config_from_file(
+            "experiments/entertrack/pcum_diagnostic_reproduction_oracle_mask.yaml",
+            base_cfg=oracle_cfg,
+        )
+        update_config_from_file(
+            "experiments/entertrack/pcum_diagnostic_formal_no_gt_mask.yaml",
+            base_cfg=formal_cfg,
+        )
+        self.assertEqual(oracle_cfg.MODEL.PCUM.FUSION, "film")
+        self.assertEqual(formal_cfg.MODEL.PCUM.FUSION, "film")
+        self.assertEqual(oracle_cfg.TEST.CHECKPOINT_NAME, formal_cfg.TEST.CHECKPOINT_NAME)
+        self.assertTrue(oracle_cfg.TEST.PCUM.USE_REMOTE_VISIBLE_MASK)
+        self.assertFalse(formal_cfg.TEST.PCUM.USE_REMOTE_VISIBLE_MASK)
+
+        network = nn.Module()
+        network.pcum = PCUM(
+            token_dim=self.dim,
+            prompt_dim=self.dim,
+            fusion_mode="film",
+            enabled=True,
+        )
+        hooks = PCUMDiagnosticHooks(network, enabled=True)
+        network.pcum(
+            {"search": self.search, "template": self.template},
+            remote_prompts=torch.randn(self.batch, 4, self.dim),
+        )
+        stats = hooks.snapshot()
+        self.assertTrue(math.isfinite(stats["alignment_gate_mean"]))
+        self.assertTrue(math.isnan(stats["fusion_gate_mean"]))
+        hooks.remove()
+
+    def test_fallback_before_and_after_are_recorded(self):
+        local = {"bbox": [0, 0, 10, 10], "confidence": 0.8, "score_max": 0.8, "apce": 150.0}
+        raw = {"bbox": [20, 20, 10, 10], "confidence": 0.2, "score_max": 0.2, "apce": 40.0}
+        row = build_frame_diagnostic_row(
+            diagnostic_label="formal_no_gt_mask",
+            uses_gt_visible_mask=False,
+            sequence_name="case-1",
+            frame_id=2,
+            current_uav="A",
+            remote_uav_ids=["B", "C"],
+            local=local,
+            raw_collaborative=raw,
+            final=local,
+            gt_bbox=[0, 0, 10, 10],
+            final_source="local",
+            fallback_triggered=True,
+            fallback_reason="remote_score_drop",
+        )
+        self.assertLess(row["instant_delta_iou"], 0.0)
+        self.assertGreater(row["fallback_delta_iou"], 0.0)
+        self.assertEqual(row["final_delta_iou"], 0.0)
+        self.assertEqual(row["final_source"], "local")
+        self.assertEqual(row["fallback_triggered"], 1)
+        self.assertEqual(row["fallback_reason"], "remote_score_drop")
+
+    def test_response_entropy_is_resolution_normalized(self):
+        uniform_small = torch.ones(1, 1, 4, 4)
+        uniform_large = torch.ones(1, 1, 16, 16)
+        self.assertAlmostEqual(normalized_response_entropy(uniform_small), 1.0, places=6)
+        self.assertAlmostEqual(normalized_response_entropy(uniform_large), 1.0, places=6)
 
 
 if __name__ == "__main__":

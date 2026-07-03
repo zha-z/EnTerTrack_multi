@@ -6,6 +6,11 @@ from lib.models.entertrack import build_entertrack
 from lib.test.tracker.basetracker import BaseTracker
 from lib.test.tracker.vis_utils import gen_visualization
 from lib.test.tracker.data_utils import Preprocessor
+from lib.test.utils.pcum_diagnostics import (
+    PCUMDiagnosticHooks,
+    normalized_response_entropy,
+    prompt_norm,
+)
 from lib.test.utils.hann import hann2d
 from lib.train.data.processing_utils import sample_target
 from lib.utils.box_ops import clip_box
@@ -35,6 +40,20 @@ class EnTeRTrack(BaseTracker):
 
         self.network = network.cuda()
         self.network.eval()
+
+        diagnostics_cfg = getattr(
+            getattr(self.cfg.TEST, "PCUM", None),
+            "FRAME_DIAGNOSTICS",
+            None,
+        )
+        self.pcum_diagnostics_enabled = bool(
+            getattr(diagnostics_cfg, "ENABLED", False)
+        )
+        self._pcum_diagnostic_hooks = PCUMDiagnosticHooks(
+            self.network,
+            enabled=self.pcum_diagnostics_enabled,
+        )
+        self.last_pcum_diagnostic = None
 
         self.preprocessor = Preprocessor()
         self.state = None
@@ -367,6 +386,9 @@ class EnTeRTrack(BaseTracker):
 
         search = self.preprocessor.process(x_patch_arr, x_amask_arr)
 
+        if self.pcum_diagnostics_enabled:
+            self._pcum_diagnostic_hooks.reset()
+
         with torch.no_grad():
             out_dict = self._network_forward(
                 search.tensors,
@@ -401,7 +423,7 @@ class EnTeRTrack(BaseTracker):
         else:
             output = {"target_bbox": target_bbox}
 
-        return {
+        candidate = {
             "output": output,
             "target_bbox": target_bbox,
             "max_score": max_score,
@@ -417,6 +439,14 @@ class EnTeRTrack(BaseTracker):
                 if isinstance(out_dict.get("pcum", None), dict) else None,
             "used_remote": remote_prompts is not None,
         }
+        if self.pcum_diagnostics_enabled:
+            candidate["diagnostics"] = {
+                **self._pcum_diagnostic_hooks.snapshot(),
+                "response_entropy": normalized_response_entropy(response),
+                "prompt_norm": prompt_norm(candidate["local_prompt"]),
+                "aligned_prompt_norm": prompt_norm(candidate["aligned_prompt"]),
+            }
+        return candidate
 
     def _commit_candidate(self, candidate, info=None, debug_name=""):
         self.state = candidate["target_bbox"]
@@ -448,6 +478,29 @@ class EnTeRTrack(BaseTracker):
         score = max(0.0, min(1.0, self._score_value(candidate["max_score"])))
         apce = max(0.0, min(1.0, self._score_value(candidate["apce"]) / apce_norm))
         return score * apce
+
+    def _diagnostic_candidate_snapshot(self, candidate):
+        if candidate is None:
+            return None
+        diagnostics = candidate.get("diagnostics", {})
+        return {
+            "bbox": list(candidate["target_bbox"]),
+            "score_max": self._score_value(candidate["max_score"]),
+            "apce": self._score_value(candidate["apce"]),
+            "confidence": self._candidate_confidence(candidate),
+            "response_entropy": diagnostics.get("response_entropy", float("nan")),
+            "alignment_gate_mean": diagnostics.get("alignment_gate_mean", float("nan")),
+            "alignment_gate_std": diagnostics.get("alignment_gate_std", float("nan")),
+            "fusion_gate_mean": diagnostics.get("fusion_gate_mean", float("nan")),
+            "fusion_gate_std": diagnostics.get("fusion_gate_std", float("nan")),
+            "fusion_gate_min": diagnostics.get("fusion_gate_min", float("nan")),
+            "fusion_gate_max": diagnostics.get("fusion_gate_max", float("nan")),
+            "prompt_norm": diagnostics.get("prompt_norm", float("nan")),
+            "aligned_prompt_norm": diagnostics.get("aligned_prompt_norm", float("nan")),
+        }
+
+    def close_pcum_diagnostics(self):
+        self._pcum_diagnostic_hooks.remove()
 
     def pcum_local_candidate(self, image, search_factor=None):
         return self._run_candidate(
@@ -484,6 +537,7 @@ class EnTeRTrack(BaseTracker):
         fallback_reason = 0.0
         redetect_local_conf = -1.0
         remote_candidate_conf = -1.0
+        raw_collaborative_candidate = None
 
         if search_factor is not None and local_candidate is not None:
             use_redetect_local = bool(getattr(
@@ -517,6 +571,7 @@ class EnTeRTrack(BaseTracker):
                 search_factor=search_factor,
                 return_score=True
             )
+            raw_collaborative_candidate = candidate
             fallback_reason = 1.0
         else:
             candidate = self._run_candidate(
@@ -526,6 +581,7 @@ class EnTeRTrack(BaseTracker):
                 remote_states=remote_states,
                 return_score=True
             )
+            raw_collaborative_candidate = candidate
             selected_source = 2.0
             remote_candidate_conf = self._candidate_confidence(candidate)
 
@@ -559,6 +615,28 @@ class EnTeRTrack(BaseTracker):
                         fallback_reason = 3.0
 
         output = self._commit_candidate(candidate, info=info, debug_name=debug_name)
+        if self.pcum_diagnostics_enabled:
+            source_names = {
+                0.0: "local",
+                1.0: "local_redetect",
+                2.0: "raw_collaborative",
+            }
+            fallback_names = {
+                0.0: "none",
+                1.0: "no_remote_prompt",
+                2.0: "remote_score_drop",
+                3.0: "remote_confidence_drop",
+            }
+            self.last_pcum_diagnostic = {
+                "local": self._diagnostic_candidate_snapshot(local_candidate),
+                "raw_collaborative": self._diagnostic_candidate_snapshot(
+                    raw_collaborative_candidate
+                ),
+                "final": self._diagnostic_candidate_snapshot(candidate),
+                "final_source": source_names.get(selected_source, "unknown"),
+                "fallback_triggered": fallback_reason in (2.0, 3.0),
+                "fallback_reason": fallback_names.get(fallback_reason, "unknown"),
+            }
         if save_decision:
             local_conf = self._candidate_confidence(local_candidate)
             output["pcum_decision"] = [

@@ -2,9 +2,11 @@ import numpy as np
 import multiprocessing
 import os
 import sys
+import csv
 from itertools import product
 from collections import OrderedDict
 from lib.test.evaluation import Sequence, Tracker
+from lib.test.utils.pcum_diagnostics import DIAGNOSTIC_COLUMNS, diagnostic_filename
 import torch
 
 
@@ -38,6 +40,12 @@ def _save_tracker_output(seq: Sequence, tracker: Tracker, output: dict):
     def save_float_matrix(file, data):
         values = np.asarray(data, dtype=float)
         np.savetxt(file, values, delimiter='\t', fmt='%.6f')
+
+    def save_frame_diagnostics(file, data):
+        with open(file, 'w', newline='') as fh:
+            writer = csv.DictWriter(fh, fieldnames=DIAGNOSTIC_COLUMNS)
+            writer.writeheader()
+            writer.writerows(data)
 
     def _convert_dict(input_dict):
         data_dict = {}
@@ -120,6 +128,20 @@ def _save_tracker_output(seq: Sequence, tracker: Tracker, output: dict):
         if key == 'pcum_decision':
             decision_file = '{}_pcum_decision.txt'.format(base_results_path)
             save_float_matrix(decision_file, data)
+
+        if key == 'pcum_frame_diagnostics':
+            uav_id = data[0].get('current_uav', 'unknown')
+            diagnostics_file = os.path.join(
+                tracker.results_dir,
+                diagnostic_filename(
+                    tracker.name,
+                    tracker.parameter_name,
+                    tracker.run_id,
+                    seq.name,
+                    uav_id,
+                ),
+            )
+            save_frame_diagnostics(diagnostics_file, data)
 
         elif key == 'time':
             if isinstance(data[0], dict):
@@ -463,14 +485,47 @@ def run_three_multi_sequence(seq_a: Sequence, seq_b: Sequence ,seq_c: Sequence, 
                 tracker._save_pcum_decision_log = False
         return tracker._save_pcum_decision_log
 
-    def _sequence_results_exist(seq, need_decision_log=False):
+    def _pcum_frame_diagnostics_enabled():
+        if not hasattr(tracker, "_save_pcum_frame_diagnostics"):
+            try:
+                params = tracker.get_parameters()
+                diagnostics_cfg = getattr(
+                    getattr(params.cfg.TEST.PCUM, "FRAME_DIAGNOSTICS", None),
+                    "ENABLED",
+                    False,
+                )
+                tracker._save_pcum_frame_diagnostics = bool(diagnostics_cfg)
+            except Exception:
+                tracker._save_pcum_frame_diagnostics = False
+        return tracker._save_pcum_frame_diagnostics
+
+    def _sequence_results_exist(
+        seq,
+        need_decision_log=False,
+        need_frame_diagnostics=False,
+        uav_id="unknown",
+    ):
         if seq.object_ids is None:
             bbox_file = '{}/{}.txt'.format(tracker.results_dir, seq.name)
             if not os.path.isfile(bbox_file):
                 return False
             if need_decision_log:
                 decision_file = '{}/{}_pcum_decision.txt'.format(tracker.results_dir, seq.name)
-                return os.path.isfile(decision_file)
+                if not os.path.isfile(decision_file):
+                    return False
+            if need_frame_diagnostics:
+                frame_file = os.path.join(
+                    tracker.results_dir,
+                    diagnostic_filename(
+                        tracker.name,
+                        tracker.parameter_name,
+                        tracker.run_id,
+                        seq.name,
+                        uav_id,
+                    ),
+                )
+                if not os.path.isfile(frame_file):
+                    return False
             return True
 
         bbox_files = [
@@ -482,13 +537,36 @@ def run_three_multi_sequence(seq_a: Sequence, seq_b: Sequence ,seq_c: Sequence, 
             return False
         if need_decision_log:
             decision_file = '{}/{}_pcum_decision.txt'.format(tracker.results_dir, seq.name)
-            return os.path.isfile(decision_file)
+            if not os.path.isfile(decision_file):
+                return False
+        if need_frame_diagnostics:
+            frame_file = os.path.join(
+                tracker.results_dir,
+                diagnostic_filename(
+                    tracker.name,
+                    tracker.parameter_name,
+                    tracker.run_id,
+                    seq.name,
+                    uav_id,
+                ),
+            )
+            if not os.path.isfile(frame_file):
+                return False
         return True
 
     def _results_exist_a():
         need_decision_log = _pcum_decision_log_enabled()
-        if need_decision_log:
-            return all(_sequence_results_exist(seq, need_decision_log=True) for seq in (seq_a, seq_b, seq_c))
+        need_frame_diagnostics = _pcum_frame_diagnostics_enabled()
+        if need_decision_log or need_frame_diagnostics:
+            return all(
+                _sequence_results_exist(
+                    seq,
+                    need_decision_log=need_decision_log,
+                    need_frame_diagnostics=need_frame_diagnostics,
+                    uav_id=uav_id,
+                )
+                for seq, uav_id in ((seq_a, "A"), (seq_b, "B"), (seq_c, "C"))
+            )
         return _sequence_results_exist(seq_a)
 
     if _results_exist_a() and not debug:
