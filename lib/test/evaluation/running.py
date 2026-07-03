@@ -451,14 +451,45 @@ def run_three_multi_sequence(seq_a: Sequence, seq_b: Sequence ,seq_c: Sequence, 
     except:
         pass
 
+    def _pcum_decision_log_enabled():
+        if not hasattr(tracker, "_save_pcum_decision_log"):
+            try:
+                params = tracker.get_parameters()
+                pcum_cfg = getattr(params.cfg.TEST, "PCUM", None)
+                tracker._save_pcum_decision_log = bool(
+                    getattr(pcum_cfg, "SAVE_DECISION_LOG", False)
+                )
+            except Exception:
+                tracker._save_pcum_decision_log = False
+        return tracker._save_pcum_decision_log
+
+    def _sequence_results_exist(seq, need_decision_log=False):
+        if seq.object_ids is None:
+            bbox_file = '{}/{}.txt'.format(tracker.results_dir, seq.name)
+            if not os.path.isfile(bbox_file):
+                return False
+            if need_decision_log:
+                decision_file = '{}/{}_pcum_decision.txt'.format(tracker.results_dir, seq.name)
+                return os.path.isfile(decision_file)
+            return True
+
+        bbox_files = [
+            '{}/{}_{}.txt'.format(tracker.results_dir, seq.name, obj_id)
+            for obj_id in seq.object_ids
+        ]
+        missing = [not os.path.isfile(f) for f in bbox_files]
+        if sum(missing) != 0:
+            return False
+        if need_decision_log:
+            decision_file = '{}/{}_pcum_decision.txt'.format(tracker.results_dir, seq.name)
+            return os.path.isfile(decision_file)
+        return True
+
     def _results_exist_a():
-        if seq_a.object_ids is None:
-            bbox_file = '{}/{}.txt'.format(tracker.results_dir, seq_a.name)
-            return os.path.isfile(bbox_file)
-        else:
-            bbox_files = ['{}/{}_{}.txt'.format(tracker.results_dir, seq_a.name, obj_id) for obj_id in seq_a.object_ids]
-            missing = [not os.path.isfile(f) for f in bbox_files]
-            return sum(missing) == 0
+        need_decision_log = _pcum_decision_log_enabled()
+        if need_decision_log:
+            return all(_sequence_results_exist(seq, need_decision_log=True) for seq in (seq_a, seq_b, seq_c))
+        return _sequence_results_exist(seq_a)
 
     if _results_exist_a() and not debug:
         print('FPS: {}'.format(-1))

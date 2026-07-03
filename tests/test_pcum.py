@@ -3,6 +3,9 @@ import sys
 import unittest
 import copy
 import importlib.util
+import tempfile
+import contextlib
+import io
 
 import torch
 import torch.nn.functional as F
@@ -26,6 +29,7 @@ from lib.models.entertrack.pcum import (  # noqa: E402
 from lib.config.entertrack.config import cfg  # noqa: E402
 from lib.config.entertrack.config import update_config_from_file  # noqa: E402
 from lib.test.evaluation.tracker import _pcum_motion_reliability  # noqa: E402
+from lib.test.evaluation.running import run_three_multi_sequence  # noqa: E402
 from lib.train.data.sampler_threemdot import TrackingSamplerThreeMDOT  # noqa: E402
 from lib.train.actors.entertrack_threemdot import EnTeRTrackActorThreeMDOT  # noqa: E402
 
@@ -71,6 +75,38 @@ class FakeThreeMDOTDataset:
             ]
         }
         return frames, anno, {"object_class_name": "target"}
+
+
+class FakeSequence:
+    def __init__(self, name):
+        self.name = name
+        self.dataset = "threemdot"
+        self.object_ids = None
+
+
+class FakeTrackerInfo:
+    def __init__(self, results_dir, save_decision_log=True):
+        self.name = "entertrack"
+        self.parameter_name = "fake"
+        self.run_id = 0
+        self.results_dir = results_dir
+        self.called = False
+        self.save_decision_log = save_decision_log
+
+    def get_parameters(self):
+        pcum = edict({"SAVE_DECISION_LOG": self.save_decision_log})
+        return edict({"cfg": edict({"TEST": edict({"PCUM": pcum})})})
+
+    def Fuse_three_multi_run_sequence(self, seq_a, seq_b, seq_c, debug=False):
+        self.called = True
+        output = {
+            "target_bbox": [[1, 2, 3, 4]],
+            "time": [1.0],
+            "max_score": [0.5],
+            "APCE": [120.0],
+            "pcum_decision": [[0.0] * 8],
+        }
+        return copy.deepcopy(output), copy.deepcopy(output), copy.deepcopy(output)
 
 
 def mark_valid(data):
@@ -421,6 +457,30 @@ class PCUMShapeTest(unittest.TestCase):
         self.assertTrue(local_cfg.TEST.PCUM.KEEP_LOCAL_IF_REMOTE_CONFIDENCE_WORSE)
         self.assertAlmostEqual(local_cfg.TEST.PCUM.REMOTE_CONFIDENCE_MAX_DROP, 0.02)
         self.assertTrue(local_cfg.TEST.PCUM.SAVE_DECISION_LOG)
+
+    def test_three_mdot_reruns_when_decision_log_missing(self):
+        seq_a = FakeSequence("case-1")
+        seq_b = FakeSequence("case-2")
+        seq_c = FakeSequence("case-3")
+
+        with tempfile.TemporaryDirectory(dir="/tmp") as results_dir:
+            for seq in (seq_a, seq_b, seq_c):
+                with open(os.path.join(results_dir, seq.name + ".txt"), "w") as fh:
+                    fh.write("1\t2\t3\t4\n")
+
+            tracker = FakeTrackerInfo(results_dir, save_decision_log=True)
+            with contextlib.redirect_stdout(io.StringIO()):
+                run_three_multi_sequence(seq_a, seq_b, seq_c, tracker, debug=False, num_gpu=1)
+            self.assertTrue(tracker.called)
+            for seq in (seq_a, seq_b, seq_c):
+                self.assertTrue(os.path.isfile(
+                    os.path.join(results_dir, seq.name + "_pcum_decision.txt")
+                ))
+
+            tracker2 = FakeTrackerInfo(results_dir, save_decision_log=True)
+            with contextlib.redirect_stdout(io.StringIO()):
+                run_three_multi_sequence(seq_a, seq_b, seq_c, tracker2, debug=False, num_gpu=1)
+            self.assertFalse(tracker2.called)
 
     def test_entertrack_pcum_is_wired_by_config(self):
         if importlib.util.find_spec("timm") is None:

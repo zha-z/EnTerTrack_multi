@@ -63,6 +63,9 @@ Single-sequence smoke test for the motion-redetect path:
 RUNID_SMOKE=302 bash experiments.sh smoke_motion
 ```
 
+When `SAVE_DECISION_LOG` is enabled, existing bbox files without matching
+`*_pcum_decision.txt` files are treated as incomplete and will be regenerated.
+
 Offline trigger diagnosis from saved full-remote results:
 
 ```bash
