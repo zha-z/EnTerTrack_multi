@@ -6,6 +6,9 @@ import re
 from glob import glob
 from statistics import mean, median
 
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
+os.environ.setdefault("XDG_CACHE_HOME", "/tmp")
+
 import matplotlib
 
 matplotlib.use("Agg")
@@ -90,6 +93,66 @@ def _write_csv(path, rows):
         writer = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _best_balanced_tracker(rows, views=("Drone A", "Drone B", "Drone C")):
+    grouped = {}
+    for row in rows:
+        grouped.setdefault(row["tracker"], {})[row["variant"]] = row
+
+    best_name = None
+    best_key = None
+    for tracker, by_view in grouped.items():
+        if not all(view in by_view for view in views):
+            continue
+        aucs = [float(by_view[view]["auc"]) for view in views]
+        key = (min(aucs), sum(aucs) / len(aucs))
+        if best_key is None or key > best_key:
+            best_key = key
+            best_name = tracker
+    return best_name
+
+
+def _write_markdown_report(path, rows, baseline, candidate):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    target_rows = [
+        row for row in rows
+        if row["tracker"] == candidate and row["variant"] in ("Drone A", "Drone B", "Drone C")
+    ]
+    target_ok = target_rows and all(row["auc"] >= 0.55 for row in target_rows)
+
+    with open(path, "w") as fh:
+        fh.write("# PCUM Ablation Report\n\n")
+        fh.write("## Objective\n\n")
+        fh.write(
+            "Evaluate cross-UAV visual prompts on ThreeMDOT. "
+            "The target is per-view Drone A/B/C AUC around or above 0.55.\n\n"
+        )
+        fh.write("## Compared Methods\n\n")
+        fh.write("- baseline: EnTeRTrack/ARP without PCUM.\n")
+        fh.write("- PCUM-local: local prompt only.\n")
+        fh.write("- remote-visual-no-mask: real multi-view remote prompt without visible mask.\n")
+        fh.write("- remote-visual-mask: real multi-view remote prompt with visible mask.\n")
+        fh.write("- gated-ab-focus / gated-balanced-focus: real multi-view remote prompt with stronger A/B view loss weights.\n")
+        fh.write("## Target Check\n\n")
+        fh.write("- Baseline method: `%s`\n" % baseline)
+        fh.write("- Main candidate: `%s`\n" % candidate)
+        fh.write("- A/B/C AUC >= 0.55: `%s`\n\n" % ("PASS" if target_ok else "NOT_YET_VERIFIED_OR_FAILED"))
+        fh.write("## Summary Table\n\n")
+        fh.write("| Display | Variant | AUC | Norm Precision | Precision@20 | FPS mean |\n")
+        fh.write("|---|---:|---:|---:|---:|---:|\n")
+        for row in rows:
+            fh.write(
+                "| {display} | {variant} | {auc:.4f} | {norm_precision:.4f} | "
+                "{precision20:.4f} | {fps_mean:.2f} |\n".format(**row)
+            )
+        fh.write("\n## Generated Artifacts\n\n")
+        fh.write("- `tracker_summary.csv`: numeric tracker summary.\n")
+        fh.write("- `target_check.md`: explicit A/B/C AUC target verdict.\n")
+        fh.write("- `balanced_target_check.csv`: ranked methods by minimum and mean single-view AUC.\n")
+        fh.write("- `pcum_auc_bars.png`: AUC comparison bar plot.\n")
+        fh.write("- `success_curves.png`: selected success curves.\n")
+        fh.write("- `delta_drone_a.png`, `delta_drone_b.png`, `delta_drone_c.png`, `delta_fused.png`: per-sequence deltas when available.\n")
 
 
 def _find_tracker_indices(rows, pattern):
@@ -198,34 +261,48 @@ def main():
     parser.add_argument("--results-root", default="output/test/tracking_results/entertrack")
     parser.add_argument("--output-dir", default="output/analysis/pcum_effectiveness")
     parser.add_argument("--baseline", default="pcum_ablation_baseline")
-    parser.add_argument("--candidate", default="pcum_real_target_stable_28")
+    parser.add_argument(
+        "--candidate",
+        default="pcum_real_target_stable_28",
+        help="Candidate tracker name, or 'auto' to select the highest min(A/B/C AUC).",
+    )
+    parser.add_argument(
+        "--include-pattern",
+        default=r"(pcum_ablation_baseline|pcum_real_target_stable|pcum_real_allviews_stable)",
+        help="Regex used to select trackers for the AUC bar plot.",
+    )
     args = parser.parse_args()
 
     with open(args.eval_pkl, "rb") as fh:
         data = pickle.load(fh)
 
     rows = _build_rows(data, args.results_root)
+    candidate = args.candidate
+    if candidate == "auto":
+        candidate = _best_balanced_tracker(rows) or args.candidate
+        print("Auto-selected candidate:", candidate)
+
     os.makedirs(args.output_dir, exist_ok=True)
     _write_csv(os.path.join(args.output_dir, "tracker_summary.csv"), rows)
+    _write_markdown_report(os.path.join(args.output_dir, "report.md"), rows, args.baseline, candidate)
 
-    include_pattern = r"(pcum_ablation_baseline|pcum_real_target_stable|pcum_real_allviews_stable)"
-    _plot_auc_bars(rows, os.path.join(args.output_dir, "pcum_auc_bars.png"), include_pattern)
+    _plot_auc_bars(rows, os.path.join(args.output_dir, "pcum_auc_bars.png"), args.include_pattern)
 
     curve_indices = []
     for target in [
         args.baseline + r" \(Fused\)",
-        args.candidate + r" \(Fused\)",
+        candidate + r" \(Fused\)",
         args.baseline + r" \(Drone A\)",
-        args.candidate + r" \(Drone A\)",
+        candidate + r" \(Drone A\)",
         args.baseline + r" \(Drone B\)",
-        args.candidate + r" \(Drone B\)",
+        candidate + r" \(Drone B\)",
         args.baseline + r" \(Drone C\)",
-        args.candidate + r" \(Drone C\)",
+        candidate + r" \(Drone C\)",
     ]:
         curve_indices.extend(_find_tracker_indices(rows, target))
     _plot_success_curves(data, rows, curve_indices, os.path.join(args.output_dir, "success_curves.png"))
 
-    _write_delta_analysis(data, rows, args.baseline, args.candidate, args.output_dir)
+    _write_delta_analysis(data, rows, args.baseline, candidate, args.output_dir)
 
     print("Wrote PCUM effectiveness analysis to:", args.output_dir)
     print("Summary CSV:", os.path.join(args.output_dir, "tracker_summary.csv"))

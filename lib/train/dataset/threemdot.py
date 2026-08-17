@@ -23,7 +23,8 @@ class ThreeMDOT(BaseVideoDataset):
     Download the dataset from https://cis.temple.edu/lasot/download.html
     """
 
-    def __init__(self, root=None, image_loader=jpeg4py_loader, vid_ids=None, split=None, data_fraction=None):
+    def __init__(self, root=None, image_loader=jpeg4py_loader, vid_ids=None,
+                 split=None, data_fraction=None, split_file=None):
         """
         args:
             root - path to the lasot dataset.
@@ -42,6 +43,7 @@ class ThreeMDOT(BaseVideoDataset):
         self.class_list = [f for f in os.listdir(self.root)]
         self.class_to_id = {cls_name: cls_id for cls_id, cls_name in enumerate(self.class_list)}
 
+        self.split_file = split_file
         self.sequence_list = self._build_sequence_list(vid_ids, split)
 
         if data_fraction is not None:
@@ -55,7 +57,9 @@ class ThreeMDOT(BaseVideoDataset):
             if vid_ids is not None:
                 raise ValueError('Cannot set both split_name and vid_ids.')
             ltr_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), '..')
-            if split == 'train':
+            if self.split_file:
+                file_path = self.split_file
+            elif split == 'train':
                 # file_path = os.path.join(ltr_path, 'data_specs', 'lasot_train_split.txt')
                 #file_path = os.path.join(ltr_path, 'data_specs/my_specs', 'lasot_train_split.txt')
                 file_path = os.path.join(ltr_path, 'data_specs/threemdot', 'threemdot_train.txt')

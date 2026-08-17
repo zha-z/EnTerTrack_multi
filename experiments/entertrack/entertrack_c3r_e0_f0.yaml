@@ -1,0 +1,2 @@
+BASE_CONFIG: entertrack_c3r_e0.yaml
+MODEL_ROLE: c3r_e0_f0_frozen_local_holdout

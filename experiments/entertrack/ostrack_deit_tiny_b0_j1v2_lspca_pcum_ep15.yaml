@@ -1,0 +1,18 @@
+BASE_CONFIG: ostrack_deit_tiny_b0_j0v2_lspca_control_ep15
+MODEL_ROLE: posthoc_j1_b0_pcum_partial_adapt
+
+MODEL:
+  PCUM:
+    ENABLED: true
+
+TRAIN:
+  PCUM:
+    USE_REAL_MULTIVIEW: true
+    PAIRED_SUPERVISION: true
+    SAFE_LOSS_WEIGHT: 0.5
+
+TEST:
+  SAVE_DIR: output/research_master_goal/lspca_v2/j1_pcum
+  CHECKPOINT_NAME: ostrack_deit_tiny_b0_j1v2_lspca_pcum_ep15
+  PCUM:
+    USE_REMOTE: true

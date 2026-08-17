@@ -3,6 +3,20 @@ from torch import nn
 import torch.nn.functional as F
 
 
+REMOTE_AGGREGATION_MODES = (
+    "mean",
+    "confidence_softmax",
+    "confidence_sigmoid",
+)
+
+
+def validate_remote_aggregation(mode):
+    mode = str(mode).lower()
+    if mode not in REMOTE_AGGREGATION_MODES:
+        raise ValueError("Unsupported remote aggregation: %s" % mode)
+    return mode
+
+
 def _as_layer_list(tokens):
     if isinstance(tokens, (list, tuple)):
         return list(tokens)
@@ -125,29 +139,16 @@ class PromptConsistencyLoss(nn.Module):
 class SaliencyTokenSelector(nn.Module):
     """Select top-k salient tokens from search/template features."""
 
-    def __init__(self, topk=16, source="feature_norm", entropy_weight=0.5,
-                 atp_weight=0.5):
+    def __init__(self, topk=16, source="feature_norm"):
         super().__init__()
-        if source not in (
-            "attention_score",
-            "feature_norm",
-            "confidence_score",
-            "arp_entropy",
-            "arp_mixed",
-        ):
+        if source not in ("attention_score", "feature_norm", "confidence_score"):
             raise ValueError("Unsupported saliency source: %s" % source)
         self.topk = int(topk)
         self.source = source
-        self.entropy_weight = float(entropy_weight)
-        self.atp_weight = float(atp_weight)
 
-    def _prepare_score(self, score, num_tokens, search_len=None, template_len=0):
+    def _prepare_score(self, score, num_tokens):
         if score is None:
             return None
-        if isinstance(score, (list, tuple)):
-            if len(score) == 0:
-                return None
-            score = score[-1]
         if score.dim() == 4:
             score = score.flatten(2).mean(dim=1)
         elif score.dim() == 3:
@@ -160,20 +161,6 @@ class SaliencyTokenSelector(nn.Module):
         elif score.dim() > 4:
             score = score.flatten(1)
 
-        if (
-            search_len is not None
-            and template_len > 0
-            and score.shape[-1] == search_len
-            and num_tokens == search_len + template_len
-        ):
-            template_score = torch.zeros(
-                score.shape[0],
-                template_len,
-                device=score.device,
-                dtype=score.dtype,
-            )
-            score = torch.cat([template_score, score], dim=-1)
-
         if score.shape[-1] != num_tokens:
             score = F.interpolate(
                 score.unsqueeze(1).float(),
@@ -183,110 +170,31 @@ class SaliencyTokenSelector(nn.Module):
             ).squeeze(1).to(dtype=score.dtype)
         return score
 
-    def _normalize_score(self, score):
-        if score is None:
-            return None
-        score = score.float()
-        min_score = score.min(dim=1, keepdim=True).values
-        max_score = score.max(dim=1, keepdim=True).values
-        return (score - min_score) / (max_score - min_score + 1e-6)
-
-    def _attention_entropy_score(self, attention_score, num_tokens,
-                                 search_len=None, template_len=0):
-        if attention_score is None:
-            return None
-        if isinstance(attention_score, (list, tuple)):
-            if len(attention_score) == 0:
-                return None
-            attention_score = attention_score[-1]
-
-        if attention_score.dim() == 4:
-            attn = attention_score.clamp(min=1e-10)
-            entropy = -(attn * attn.log()).sum(dim=-2).mean(dim=1)
-            return self._prepare_score(
-                entropy,
-                num_tokens,
-                search_len=search_len,
-                template_len=template_len,
-            )
-
-        return self._prepare_score(
-            attention_score,
-            num_tokens,
-            search_len=search_len,
-            template_len=template_len,
-        )
-
     def forward(self, search_feature, template_feature=None,
-                attention_score=None, confidence_score=None, atp_mask=None,
-                source=None):
+                attention_score=None, confidence_score=None, source=None):
         if search_feature.dim() != 3:
             raise ValueError("search_feature must have shape [B, N, C]")
 
         tokens = search_feature
         search_len = search_feature.shape[1]
-        template_len = 0
         if template_feature is not None:
             if template_feature.dim() != 3:
                 raise ValueError("template_feature must have shape [B, N, C]")
-            template_len = template_feature.shape[1]
             tokens = torch.cat([template_feature, search_feature], dim=1)
 
         B, N, C = tokens.shape
         saliency_source = source or self.source
 
         if saliency_source == "attention_score":
-            score = self._prepare_score(
-                attention_score,
-                N,
-                search_len=search_len,
-                template_len=template_len,
-            )
+            score = self._prepare_score(attention_score, N)
             if score is None:
                 score = tokens.norm(dim=-1)
         elif saliency_source == "confidence_score":
-            score = self._prepare_score(
-                confidence_score,
-                N,
-                search_len=search_len,
-                template_len=template_len,
-            )
+            score = self._prepare_score(confidence_score, N)
             if score is None:
                 score = tokens.norm(dim=-1)
         elif saliency_source == "feature_norm":
             score = tokens.norm(dim=-1)
-        elif saliency_source == "arp_entropy":
-            score = self._attention_entropy_score(
-                attention_score,
-                N,
-                search_len=search_len,
-                template_len=template_len,
-            )
-            if score is None:
-                score = tokens.norm(dim=-1)
-        elif saliency_source == "arp_mixed":
-            feature_score = self._normalize_score(tokens.norm(dim=-1))
-            entropy_score = self._normalize_score(
-                self._attention_entropy_score(
-                    attention_score,
-                    N,
-                    search_len=search_len,
-                    template_len=template_len,
-                )
-            )
-            atp_score = self._normalize_score(
-                self._prepare_score(
-                    atp_mask,
-                    N,
-                    search_len=search_len,
-                    template_len=template_len,
-                )
-            )
-            score = feature_score
-            if entropy_score is not None:
-                score = score + self.entropy_weight * entropy_score
-            if atp_score is not None:
-                score = score + self.atp_weight * atp_score
         else:
             raise ValueError("Unsupported saliency source: %s" % saliency_source)
 
@@ -365,10 +273,203 @@ class MultiLayerPromptEncoder(nn.Module):
         return prompts
 
 
+class RemotePromptAggregator(nn.Module):
+    """Aggregate UAV-level prompts using detached prediction reliability."""
+
+    _QUALITY_KEYS = (
+        "per_remote_score",
+        "per_remote_apce",
+        "per_remote_bbox_score",
+        "per_remote_motion_reliability",
+    )
+
+    def __init__(self, mode="mean", temperature=0.25, eps=1e-6,
+                 min_quality=0.0, diagnostics=True):
+        super().__init__()
+        self.mode = validate_remote_aggregation(mode)
+        self.temperature = float(temperature)
+        self.eps = float(eps)
+        self.min_quality = float(min_quality)
+        self.diagnostics = bool(diagnostics)
+        if self.temperature <= 0:
+            raise ValueError("REMOTE_WEIGHT_TEMPERATURE must be positive")
+        if self.eps <= 0:
+            raise ValueError("REMOTE_WEIGHT_EPS must be positive")
+
+    def _stack_remote(self, remote_prompt):
+        if isinstance(remote_prompt, (list, tuple)):
+            remote_prompt = torch.stack(remote_prompt, dim=1)
+        if remote_prompt.dim() == 3:
+            remote_prompt = remote_prompt.unsqueeze(1)
+        if remote_prompt.dim() != 4:
+            raise ValueError(
+                "remote_prompt must have shape [B, M, C] or [B, R, M, C]"
+            )
+        return remote_prompt
+
+    def _state_tensor(self, remote_state, key, batch_size, num_remote,
+                      device, dtype):
+        if not isinstance(remote_state, dict) or key not in remote_state:
+            return None
+        value = remote_state[key]
+        if not torch.is_tensor(value):
+            value = torch.as_tensor(value)
+        value = value.detach().to(device=device)
+        if value.dim() == 0:
+            value = value.view(1, 1)
+        elif value.dim() == 1:
+            if value.numel() == num_remote:
+                value = value.view(1, num_remote)
+            elif value.numel() == batch_size:
+                value = value.view(batch_size, 1)
+            else:
+                return None
+        else:
+            value = value.reshape(value.shape[0], -1)
+        if value.shape[0] == 1 and batch_size > 1:
+            value = value.expand(batch_size, -1)
+        if value.shape != (batch_size, num_remote):
+            return None
+        if key == "per_remote_valid":
+            return value.to(dtype=torch.bool)
+        return value.to(dtype=dtype)
+
+    def _quality(self, remote_state, batch_size, num_remote, device, dtype):
+        valid = self._state_tensor(
+            remote_state,
+            "per_remote_valid",
+            batch_size,
+            num_remote,
+            device,
+            dtype,
+        )
+        if valid is None:
+            valid = torch.ones(
+                batch_size, num_remote, device=device, dtype=torch.bool
+            )
+
+        log_sum = torch.zeros(batch_size, num_remote, device=device, dtype=dtype)
+        count = torch.zeros_like(log_sum)
+        for key in self._QUALITY_KEYS:
+            metric = self._state_tensor(
+                remote_state, key, batch_size, num_remote, device, dtype
+            )
+            if metric is None:
+                continue
+            available = torch.isfinite(metric)
+            clamped = metric.clamp(min=self.eps, max=1.0)
+            log_sum = log_sum + torch.where(
+                available, clamped.log(), torch.zeros_like(clamped)
+            )
+            count = count + available.to(dtype=dtype)
+
+        has_quality = count > 0
+        quality = torch.zeros_like(log_sum)
+        quality = torch.where(
+            has_quality,
+            torch.exp(log_sum / count.clamp_min(1.0)),
+            quality,
+        )
+        eligible = valid & has_quality & (quality >= self.min_quality)
+        return quality, valid, eligible
+
+    def _fallback_weights(self, valid, dtype):
+        valid_weight = valid.to(dtype=dtype)
+        valid_count = valid_weight.sum(dim=1, keepdim=True)
+        uniform_valid = valid_weight / valid_count.clamp_min(1.0)
+        uniform_all = torch.full_like(valid_weight, 1.0 / valid_weight.shape[1])
+        return torch.where(valid_count > 0, uniform_valid, uniform_all)
+
+    def forward(self, remote_prompt, remote_state=None):
+        prompts = self._stack_remote(remote_prompt)
+        batch_size, num_remote = prompts.shape[:2]
+        quality, valid, eligible = self._quality(
+            remote_state,
+            batch_size,
+            num_remote,
+            prompts.device,
+            prompts.dtype,
+        )
+
+        fallback = torch.zeros(batch_size, device=prompts.device, dtype=torch.bool)
+        if self.mode == "mean":
+            # Keep this exact operation for checkpoint and bbox compatibility.
+            merged = prompts.mean(dim=1)
+            weights = torch.full(
+                (batch_size, num_remote),
+                1.0 / num_remote,
+                device=prompts.device,
+                dtype=prompts.dtype,
+            )
+        else:
+            has_eligible = eligible.any(dim=1)
+            fallback = ~has_eligible
+            safe_quality = quality.clamp_min(self.eps)
+            if self.mode == "confidence_softmax":
+                logits = safe_quality.log() / self.temperature
+                logits = logits.masked_fill(~eligible, torch.finfo(logits.dtype).min)
+                logits = torch.where(
+                    has_eligible.view(-1, 1), logits, torch.zeros_like(logits)
+                )
+                weights = torch.softmax(logits, dim=1)
+                weights = weights * eligible.to(dtype=weights.dtype)
+                weights = weights / weights.sum(dim=1, keepdim=True).clamp_min(self.eps)
+            else:
+                center = torch.as_tensor(
+                    0.5, device=prompts.device, dtype=prompts.dtype
+                ).log()
+                logits = (safe_quality.log() - center) / self.temperature
+                weights = torch.sigmoid(logits) * eligible.to(dtype=prompts.dtype)
+                weights = weights / weights.sum(dim=1, keepdim=True).clamp_min(self.eps)
+
+            fallback_weights = self._fallback_weights(valid, prompts.dtype)
+            weights = torch.where(fallback.view(-1, 1), fallback_weights, weights)
+            merged = (prompts * weights[:, :, None, None]).sum(dim=1)
+
+        quality_for_stats = torch.where(valid, quality, torch.zeros_like(quality))
+        valid_count = valid.sum(dim=1)
+        quality_count = (valid & (quality > 0)).sum(dim=1)
+        quality_sum = quality_for_stats.sum(dim=1)
+        quality_mean = quality_sum / quality_count.clamp_min(1).to(prompts.dtype)
+        quality_min = torch.where(
+            valid & (quality > 0),
+            quality,
+            torch.full_like(quality, float("inf")),
+        ).min(dim=1).values
+        quality_min = torch.where(
+            torch.isfinite(quality_min), quality_min, torch.zeros_like(quality_min)
+        )
+        quality_max = quality_for_stats.max(dim=1).values
+        entropy = -(weights * weights.clamp_min(self.eps).log()).sum(dim=1)
+        confidence_remote = (weights * quality).sum(dim=1, keepdim=True)
+
+        return {
+            "prompt": merged,
+            "weights": weights.detach(),
+            "quality": quality.detach(),
+            "confidence": confidence_remote.detach(),
+            "fallback": fallback.detach(),
+            "diagnostics": {
+                "remote_weight_entropy": entropy.detach(),
+                "remote_weight_max": weights.max(dim=1).values.detach(),
+                "remote_weight_mean": weights.mean(dim=1).detach(),
+                "selected_remote_index": weights.argmax(dim=1).detach(),
+                "valid_remote_count": valid_count.detach(),
+                "remote_quality_mean": quality_mean.detach(),
+                "remote_quality_min": quality_min.detach(),
+                "remote_quality_max": quality_max.detach(),
+                "fallback_to_uniform": fallback.detach(),
+            },
+        }
+
+
 class PromptAligner(nn.Module):
     """Normalize local prompts and optionally align them with remote prompts."""
 
-    def __init__(self, prompt_dim, gate="cosine"):
+    def __init__(self, prompt_dim, gate="cosine", remote_aggregation="mean",
+                 remote_weight_temperature=0.25, remote_weight_eps=1e-6,
+                 remote_weight_min_quality=0.0,
+                 remote_weight_diagnostics=True):
         super().__init__()
         if gate not in ("cosine", "confidence", "cosine_confidence"):
             raise ValueError("Unsupported align gate: %s" % gate)
@@ -380,15 +481,16 @@ class PromptAligner(nn.Module):
             nn.GELU(),
             nn.Linear(prompt_dim, prompt_dim),
         )
+        self.remote_aggregator = RemotePromptAggregator(
+            mode=remote_aggregation,
+            temperature=remote_weight_temperature,
+            eps=remote_weight_eps,
+            min_quality=remote_weight_min_quality,
+            diagnostics=remote_weight_diagnostics,
+        )
 
-    def _merge_remote(self, remote_prompt):
-        if isinstance(remote_prompt, (list, tuple)):
-            remote_prompt = torch.stack(remote_prompt, dim=1)
-        if remote_prompt.dim() == 4:
-            remote_prompt = remote_prompt.mean(dim=1)
-        if remote_prompt.dim() != 3:
-            raise ValueError("remote_prompt must have shape [B, M, C] or [B, R, M, C]")
-        return remote_prompt
+    def _merge_remote(self, remote_prompt, remote_state=None):
+        return self.remote_aggregator(remote_prompt, remote_state)
 
     def forward(self, local_prompt, remote_prompt=None, local_state=None, remote_state=None):
         if local_prompt.dim() != 3:
@@ -401,7 +503,8 @@ class PromptAligner(nn.Module):
                 "gate": None,
             }
 
-        remote = self.remote_norm(self._merge_remote(remote_prompt))
+        aggregation = self._merge_remote(remote_prompt, remote_state)
+        remote = self.remote_norm(aggregation["prompt"])
         if remote.shape[1] != local.shape[1]:
             remote = F.interpolate(
                 remote.transpose(1, 2),
@@ -419,7 +522,18 @@ class PromptAligner(nn.Module):
         if self.gate in ("confidence", "cosine_confidence"):
             B = local.shape[0]
             local_conf = _state_confidence(local_state, B, local.device, local.dtype)
-            remote_conf = _state_confidence(remote_state, B, local.device, local.dtype)
+            remote_conf = _state_confidence(
+                remote_state, B, local.device, local.dtype
+            )
+            if self.remote_aggregator.mode != "mean":
+                weighted_conf = aggregation["confidence"].to(
+                    device=local.device, dtype=local.dtype
+                )
+                remote_conf = torch.where(
+                    aggregation["fallback"].view(B, 1),
+                    remote_conf,
+                    weighted_conf,
+                )
             confidence_gate = (remote_conf / (local_conf + remote_conf + 1e-6)).view(B, 1, 1)
 
         if self.gate == "cosine_confidence":
@@ -435,6 +549,9 @@ class PromptAligner(nn.Module):
         return {
             "prompt": F.normalize(aligned, dim=-1),
             "gate": gate,
+            "remote_weights": aggregation["weights"],
+            "remote_quality": aggregation["quality"],
+            "remote_aggregation_diagnostics": aggregation["diagnostics"],
         }
 
 
@@ -484,28 +601,90 @@ class PromptFusion(nn.Module):
         return search_tokens + residual_scale * (search_tokens * torch.tanh(gamma) + beta)
 
 
+class RemoteSuppressionGate(nn.Module):
+    """Prediction-only gate for suppressing a frozen remote residual."""
+
+    def __init__(self, token_dim, init_bias=-4.0):
+        super().__init__()
+        self.proj = nn.Linear(int(token_dim) * 3 + 3, 1)
+        nn.init.zeros_(self.proj.weight)
+        nn.init.zeros_(self.proj.bias)
+        self.bias = nn.Parameter(torch.tensor(float(init_bias)))
+
+    def forward(self, local_feature, remote_context, remote_delta,
+                diagnostics=None, override=None):
+        if local_feature.dim() != 3:
+            raise ValueError("local_feature must have shape [B, N, C]")
+        if remote_context.dim() != 3:
+            raise ValueError("remote_context must have shape [B, N, C]")
+        if remote_delta.dim() != 3:
+            raise ValueError("remote_delta must have shape [B, N, C]")
+
+        batch_size = local_feature.shape[0]
+        device = local_feature.device
+        dtype = local_feature.dtype
+
+        def _diag_value(key):
+            if not isinstance(diagnostics, dict) or key not in diagnostics:
+                return torch.zeros(batch_size, 1, device=device, dtype=dtype)
+            value = diagnostics[key]
+            if not torch.is_tensor(value):
+                value = torch.as_tensor(value, device=device, dtype=dtype)
+            value = value.detach().to(device=device, dtype=dtype).reshape(batch_size, -1)
+            return value[:, :1]
+
+        gate_input = torch.cat([
+            local_feature.detach().mean(dim=1),
+            remote_context.detach().mean(dim=1),
+            remote_delta.detach().abs().mean(dim=1),
+            _diag_value("remote_quality_mean"),
+            _diag_value("remote_weight_entropy"),
+            _diag_value("remote_weight_max"),
+        ], dim=1)
+
+        if override is None:
+            suppress = torch.sigmoid(self.proj(gate_input) + self.bias)
+        else:
+            suppress = torch.full(
+                (batch_size, 1),
+                float(override),
+                device=device,
+                dtype=dtype,
+            )
+        return suppress.view(batch_size, 1, 1), gate_input
+
+
 class PCUM(nn.Module):
     """Prompt-based cross-UAV feature fusion and consistency modeling."""
 
     def __init__(self, token_dim, prompt_dim=None, num_prompts=4, topk=16,
                  saliency_source="feature_norm", fusion_mode="gated_add",
                  align_gate="cosine", enabled=False, fusion_init_scale=0.0,
-                 fusion_scale_max=0.0, entropy_weight=0.5, atp_weight=0.5):
+                 fusion_scale_max=0.0, remote_aggregation="mean",
+                 remote_weight_temperature=0.25, remote_weight_eps=1e-6,
+                 remote_weight_min_quality=0.0,
+                 remote_weight_diagnostics=True,
+                 remote_suppression_enabled=False,
+                 remote_suppression_gate_init_bias=-4.0,
+                 remote_suppression_active_threshold=0.5):
         super().__init__()
         prompt_dim = int(prompt_dim or token_dim)
         self.enabled = bool(enabled)
-        self.selector = SaliencyTokenSelector(
-            topk=topk,
-            source=saliency_source,
-            entropy_weight=entropy_weight,
-            atp_weight=atp_weight,
-        )
+        self.selector = SaliencyTokenSelector(topk=topk, source=saliency_source)
         self.encoder = MultiLayerPromptEncoder(
             input_dim=token_dim,
             prompt_dim=prompt_dim,
             num_prompts=num_prompts,
         )
-        self.aligner = PromptAligner(prompt_dim=prompt_dim, gate=align_gate)
+        self.aligner = PromptAligner(
+            prompt_dim=prompt_dim,
+            gate=align_gate,
+            remote_aggregation=remote_aggregation,
+            remote_weight_temperature=remote_weight_temperature,
+            remote_weight_eps=remote_weight_eps,
+            remote_weight_min_quality=remote_weight_min_quality,
+            remote_weight_diagnostics=remote_weight_diagnostics,
+        )
         self.fusion = PromptFusion(
             token_dim=token_dim,
             prompt_dim=prompt_dim,
@@ -513,6 +692,15 @@ class PCUM(nn.Module):
             init_scale=fusion_init_scale,
             max_scale=fusion_scale_max,
         )
+        self.remote_suppression_enabled = bool(remote_suppression_enabled)
+        self.remote_suppression_active_threshold = float(
+            remote_suppression_active_threshold)
+        self.remote_suppression_gate = None
+        if self.remote_suppression_enabled:
+            self.remote_suppression_gate = RemoteSuppressionGate(
+                token_dim=token_dim,
+                init_bias=remote_suppression_gate_init_bias,
+            )
 
     def _unpack_features(self, features):
         if torch.is_tensor(features):
@@ -523,30 +711,19 @@ class PCUM(nn.Module):
         layers = features.get("layers", None)
         attention = features.get("attention_score", None)
         confidence = features.get("confidence_score", None)
-        atp_mask = features.get("atp_mask", features.get("atp_masks", None))
         if search is None and layers is not None:
             search = _as_layer_list(layers)[-1]
         if search is None:
             raise ValueError("features must provide search/search_tokens or layers")
-        return search, template, layers, attention, confidence, atp_mask
+        return search, template, layers, attention, confidence
 
-    def forward(self, features, local_state=None, remote_prompts=None, remote_states=None):
-        search_tokens, template_tokens, layers, attention_score, confidence_score, atp_mask = self._unpack_features(features)
-        if not self.enabled:
-            return {
-                "search_tokens": search_tokens,
-                "local_prompt": None,
-                "aligned_prompt": None,
-                "selected_indices": None,
-                "align_gate": None,
-            }
-
+    def _select_and_encode_prompt(self, search_tokens, template_tokens, layers,
+                                  attention_score, confidence_score):
         selected = self.selector(
             search_tokens,
             template_feature=template_tokens,
             attention_score=attention_score,
             confidence_score=confidence_score,
-            atp_mask=atp_mask,
         )
 
         prompt_input = selected["tokens"]
@@ -558,11 +735,21 @@ class PCUM(nn.Module):
                     template_feature=None,
                     attention_score=attention_score,
                     confidence_score=confidence_score,
-                    atp_mask=atp_mask,
                 )
                 prompt_input.append(layer_selected["tokens"])
 
-        local_prompt = self.encoder(prompt_input)
+        return selected, self.encoder(prompt_input)
+
+    def _forward_standard(self, search_tokens, template_tokens, layers,
+                          attention_score, confidence_score, local_state,
+                          remote_prompts, remote_states):
+        selected, local_prompt = self._select_and_encode_prompt(
+            search_tokens,
+            template_tokens,
+            layers,
+            attention_score,
+            confidence_score,
+        )
         aligned = self.aligner(
             local_prompt,
             remote_prompt=remote_prompts,
@@ -578,7 +765,109 @@ class PCUM(nn.Module):
             "selected_indices": selected["indices"],
             "selected_scores": selected["scores"],
             "align_gate": aligned["gate"],
+            "remote_weights": aligned.get("remote_weights", None),
+            "remote_quality": aligned.get("remote_quality", None),
+            "remote_aggregation_diagnostics": aligned.get(
+                "remote_aggregation_diagnostics", None
+            ),
         }
+
+    def _forward_remote_suppression(self, search_tokens, template_tokens, layers,
+                                    attention_score, confidence_score, local_state,
+                                    remote_prompts, remote_states,
+                                    remote_suppression_override=None):
+        selected, local_prompt = self._select_and_encode_prompt(
+            search_tokens,
+            template_tokens,
+            layers,
+            attention_score,
+            confidence_score,
+        )
+        local_aligned = self.aligner(local_prompt, remote_prompt=None)
+        local_feature = self.fusion(search_tokens, local_aligned["prompt"])
+
+        if remote_prompts is None:
+            aligned = local_aligned
+            a0_feature = local_feature
+        else:
+            aligned = self.aligner(
+                local_prompt,
+                remote_prompt=remote_prompts,
+                local_state=local_state,
+                remote_state=remote_states,
+            )
+            a0_feature = self.fusion(search_tokens, aligned["prompt"])
+
+        remote_delta = (a0_feature - local_feature).detach()
+        suppress, gate_input = self.remote_suppression_gate(
+            local_feature.detach(),
+            a0_feature.detach(),
+            remote_delta,
+            diagnostics=aligned.get("remote_aggregation_diagnostics", None),
+            override=remote_suppression_override,
+        )
+        suppressed_delta = suppress * remote_delta
+        fused_search = a0_feature.detach() - suppressed_delta
+        active = suppress.detach() > self.remote_suppression_active_threshold
+
+        align_gate = aligned["gate"]
+        if torch.is_tensor(align_gate):
+            align_gate = align_gate.detach()
+        return {
+            "search_tokens": fused_search,
+            "local_prompt": local_prompt.detach(),
+            "aligned_prompt": aligned["prompt"].detach(),
+            "selected_indices": selected["indices"],
+            "selected_scores": selected["scores"],
+            "align_gate": align_gate,
+            "remote_weights": aligned.get("remote_weights", None),
+            "remote_quality": aligned.get("remote_quality", None),
+            "remote_aggregation_diagnostics": aligned.get(
+                "remote_aggregation_diagnostics", None
+            ),
+            "remote_suppression": suppress,
+            "remote_suppression_gate_input": gate_input.detach(),
+            "remote_delta_norm": remote_delta.detach().float().norm(dim=-1).mean().detach(),
+            "suppressed_delta_norm": suppressed_delta.detach().float().norm(dim=-1).mean().detach(),
+            "remote_suppression_active_ratio": active.float().mean().detach(),
+            "remote_suppression_enabled": True,
+        }
+
+    def forward(self, features, local_state=None, remote_prompts=None, remote_states=None,
+                remote_suppression_override=None):
+        search_tokens, template_tokens, layers, attention_score, confidence_score = self._unpack_features(features)
+        if not self.enabled:
+            return {
+                "search_tokens": search_tokens,
+                "local_prompt": None,
+                "aligned_prompt": None,
+                "selected_indices": None,
+                "align_gate": None,
+            }
+
+        if self.remote_suppression_enabled:
+            return self._forward_remote_suppression(
+                search_tokens,
+                template_tokens,
+                layers,
+                attention_score,
+                confidence_score,
+                local_state,
+                remote_prompts,
+                remote_states,
+                remote_suppression_override=remote_suppression_override,
+            )
+
+        return self._forward_standard(
+            search_tokens,
+            template_tokens,
+            layers,
+            attention_score,
+            confidence_score,
+            local_state,
+            remote_prompts,
+            remote_states,
+        )
 
 
 def build_pcum(cfg, token_dim=None):
@@ -595,6 +884,18 @@ def build_pcum(cfg, token_dim=None):
         enabled=pcum_cfg.ENABLED,
         fusion_init_scale=getattr(pcum_cfg, "FUSION_INIT_SCALE", 0.0),
         fusion_scale_max=getattr(pcum_cfg, "FUSION_SCALE_MAX", 0.0),
-        entropy_weight=getattr(pcum_cfg, "ENTROPY_WEIGHT", 0.5),
-        atp_weight=getattr(pcum_cfg, "ATP_WEIGHT", 0.5),
+        remote_aggregation=getattr(pcum_cfg, "REMOTE_AGGREGATION", "mean"),
+        remote_weight_temperature=getattr(
+            pcum_cfg, "REMOTE_WEIGHT_TEMPERATURE", 0.25),
+        remote_weight_eps=getattr(pcum_cfg, "REMOTE_WEIGHT_EPS", 1e-6),
+        remote_weight_min_quality=getattr(
+            pcum_cfg, "REMOTE_WEIGHT_MIN_QUALITY", 0.0),
+        remote_weight_diagnostics=getattr(
+            pcum_cfg, "REMOTE_WEIGHT_DIAGNOSTICS", True),
+        remote_suppression_enabled=getattr(
+            pcum_cfg, "REMOTE_SUPPRESSION_ENABLED", False),
+        remote_suppression_gate_init_bias=getattr(
+            pcum_cfg, "REMOTE_SUPPRESSION_GATE_INIT_BIAS", -4.0),
+        remote_suppression_active_threshold=getattr(
+            pcum_cfg, "REMOTE_SUPPRESSION_ACTIVE_THRESHOLD", 0.5),
     )

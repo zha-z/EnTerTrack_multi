@@ -6,6 +6,7 @@ import torch
 import pickle
 import json
 from lib.test.evaluation.environment import env_settings
+from lib.test.evaluation.run_id import format_run_id
 from lib.test.analysis.extract_results import extract_results
 
 
@@ -91,8 +92,9 @@ def get_tracker_display_name(tracker):
         if tracker['run_id'] is None:
             disp_name = '{}_{}'.format(tracker['name'], tracker['param'])
         else:
-            disp_name = '{}_{}_{:03d}'.format(tracker['name'], tracker['param'],
-                                              tracker['run_id'])
+            disp_name = '{}_{}_{}'.format(
+                tracker['name'], tracker['param'],
+                format_run_id(tracker['run_id']))
     else:
         disp_name = tracker['disp_name']
 

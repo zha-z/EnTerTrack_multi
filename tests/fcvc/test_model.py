@@ -1,0 +1,10 @@
+import unittest
+
+import common
+
+
+class FCVCModelContractTest(unittest.TestCase):
+    test_zero_residual_preserves_template_and_local = common.legacy_model.FCVCContractTest.test_zero_residual_template_and_local_immutability
+    test_coordinate_isolation_and_null_attention = common.legacy_model.FCVCContractTest.test_coordinate_isolation_and_null_behavior
+    test_sender_order_is_canonical_by_view = common.legacy_model.FCVCContractTest.test_sender_permutation_consistency_by_view_id
+    test_shape_dtype_device_contract = common.legacy_model.FCVCContractTest.test_shape_dtype_device_and_determinism

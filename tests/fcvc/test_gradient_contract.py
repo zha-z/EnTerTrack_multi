@@ -1,0 +1,7 @@
+import unittest
+
+import common
+
+
+class FCVCGradientContractTest(unittest.TestCase):
+    test_frozen_tracker_and_teacher_gradient_boundaries = common.legacy_model.FCVCContractTest.test_freeze_gradient_teacher_detach_and_checkpoint_isolation

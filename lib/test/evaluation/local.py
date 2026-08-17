@@ -20,7 +20,7 @@ def local_env_settings():
     settings.prj_dir = '/data/zjy/EnTeR-Track-main'
     settings.result_plot_path = '/data/zjy/EnTeR-Track-main/output/test/result_plots'
     settings.results_path = '/data/zjy/EnTeR-Track-main/output/test/tracking_results'    # Where to store tracking results
-    settings.save_dir = '/data/zjy/multi/output/entertrack_single_lasot_ft_cons'
+    settings.save_dir = '/data/zjy/EnTeR-Track-main/output/pcum_ablation_group2'
     settings.segmentation_path = '/data/zjy/EnTeR-Track-main/output/test/segmentation_results'
     settings.tc128_path = '/data/TC128'
     settings.tn_packed_results_path = ''
@@ -37,6 +37,7 @@ def local_env_settings():
 
     settings.mdot_test_path = '/data2/Two-MDOT/test/two/'
     settings.threemdot_test_path = '/data2/Three-MDOT/three'
+    settings.threemdot_val_path = '/data2/Three-MDOT'
 
     settings.dtb70_path = '/data/DTB70'
     settings.uavdt_path = '/data/UAVDT'
@@ -45,4 +46,3 @@ def local_env_settings():
     settings.uav123_path = '/data/uav123'
     settings.uavtrack_path = '/data/UAVTrack112'
     return settings
-

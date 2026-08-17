@@ -1,0 +1,9 @@
+import unittest
+
+import common
+
+
+class FCVCRuntimeContractTest(unittest.TestCase):
+    test_persistent_state_registry_is_complete = common.legacy_runtime.FCVCRuntimeIntegrationTest.test_persistent_registry_completeness
+    test_ten_frame_state_and_extreme_report_isolation = common.legacy_runtime.FCVCRuntimeIntegrationTest.test_ten_frame_state_identity_and_extreme_report_isolation
+    test_multiview_target_streams_are_isolated = common.legacy_runtime.FCVCRuntimeIntegrationTest.test_multiview_stream_isolation_and_sender_local_provenance

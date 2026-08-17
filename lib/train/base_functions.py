@@ -7,6 +7,19 @@ from lib.train.data import sampler, opencv_loader, processing, LTRLoader, sample
 import lib.train.data.transforms as tfm
 from lib.utils.misc import is_main_process
 from lib.train.optimizer_groups import build_optimizer_param_groups
+from lib.train.pcum_freeze import (
+    apply_partial_adaptation_freeze,
+    partial_adaptation_enabled,
+)
+from lib.train.c3r_freeze import (
+    apply_c3r_freeze,
+    assert_c3r_optimizer_membership,
+    c3r_training_enabled,
+)
+from lib.train.pcum_freeze import (
+    apply_pcum_ranking_freeze,
+    assert_optimizer_has_only_pcum_params,
+)
 
 
 def update_settings(settings, cfg):
@@ -23,6 +36,8 @@ def update_settings(settings, cfg):
     settings.print_stats = None
     settings.batchsize = cfg.TRAIN.BATCH_SIZE
     settings.scheduler_type = cfg.TRAIN.SCHEDULER.TYPE
+    settings.threemdot_train_split_file = getattr(cfg.DATA.TRAIN, "SPLIT_FILE", "")
+    settings.threemdot_val_split_file = getattr(cfg.DATA.VAL, "SPLIT_FILE", "")
 
 
 def names2datasets(name_list: list, settings, image_loader):
@@ -48,9 +63,11 @@ def names2datasets(name_list: list, settings, image_loader):
         if name == "TWOMDOT_VAL":
             datasets.append(TwoMDOT(settings.env.twomdot_dir, split='val', image_loader=image_loader))
         if name == "THREEMDOT":
-            datasets.append(ThreeMDOT(settings.env.threemdot_dir, split='train', image_loader=image_loader))
+            datasets.append(ThreeMDOT(settings.env.threemdot_dir, split='train', image_loader=image_loader,
+                                      split_file=getattr(settings, "threemdot_train_split_file", "")))
         if name == "THREEMDOT_VAL":
-            datasets.append(ThreeMDOT(settings.env.threemdot_dir, split='val', image_loader=image_loader))
+            datasets.append(ThreeMDOT(settings.env.threemdot_dir, split='val', image_loader=image_loader,
+                                      split_file=getattr(settings, "threemdot_val_split_file", "")))
         if name == "GOT10K_vottrain":
             if settings.use_lmdb:
                 print("Building got10k from lmdb")
@@ -403,6 +420,28 @@ def build_dataloaders_moe(cfg, settings):         # moe tracking的dataloader
 
 
 def get_optimizer_scheduler(net, cfg):
+    target_net = net.module if hasattr(net, "module") else net
+    if c3r_training_enabled(cfg):
+        apply_c3r_freeze(net, cfg, verbose=is_main_process())
+    elif partial_adaptation_enabled(cfg):
+        apply_partial_adaptation_freeze(net, cfg, verbose=is_main_process())
+    elif hasattr(cfg.TRAIN, "PCUM_RANKING") and (
+            getattr(cfg.TRAIN.PCUM_RANKING, "FREEZE_BACKBONE", False)
+            or getattr(cfg.TRAIN.PCUM_RANKING, "FREEZE_HEAD", False)):
+        apply_pcum_ranking_freeze(net, cfg, verbose=is_main_process())
+    elif getattr(cfg.TRAIN, "FREEZE_BACKBONE", False):
+        for name, parameter in target_net.named_parameters():
+            if name.startswith("backbone."):
+                parameter.requires_grad = False
+        if is_main_process():
+            print("FREEZE_BACKBONE enabled: backbone parameters are frozen.")
+    if getattr(cfg.TRAIN, "FREEZE_HEAD", False) and not c3r_training_enabled(cfg):
+        for name, parameter in target_net.named_parameters():
+            if not name.startswith(("backbone.", "pcum.")):
+                parameter.requires_grad = False
+        if is_main_process():
+            print("FREEZE_HEAD enabled: non-PCUM head/other parameters are frozen.")
+
     train_cls = getattr(cfg.TRAIN, "TRAIN_CLS", False)
     if getattr(cfg.TRAIN, "PROMPT_ONLY", False):
         print("Only training search prompt gate.")
@@ -429,6 +468,8 @@ def get_optimizer_scheduler(net, cfg):
             else:
                 print(n)
     else:
+        if not c3r_training_enabled(cfg):
+            assert_optimizer_has_only_pcum_params(net, cfg)
         param_dicts = build_optimizer_param_groups(
             net, cfg, verbose=is_main_process())
 
@@ -437,6 +478,8 @@ def get_optimizer_scheduler(net, cfg):
                                       weight_decay=cfg.TRAIN.WEIGHT_DECAY)
     else:
         raise ValueError("Unsupported Optimizer")
+    if c3r_training_enabled(cfg):
+        assert_c3r_optimizer_membership(net, optimizer)
     if cfg.TRAIN.SCHEDULER.TYPE == 'step':
         lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, cfg.TRAIN.LR_DROP_EPOCH)
     elif cfg.TRAIN.SCHEDULER.TYPE == "Mstep":

@@ -1,4 +1,8 @@
 from lib.utils import TensorDict
+from lib.train.pcum_freeze import (
+    assert_pcum_frozen_batchnorm_eval,
+    set_pcum_frozen_modules_eval,
+)
 
 
 class BaseActor:
@@ -38,6 +42,10 @@ class BaseActor:
             mode (True) - Bool specifying whether in training mode.
         """
         self.net.train(mode)
+        cfg = getattr(self, "cfg", None)
+        if mode and cfg is not None:
+            set_pcum_frozen_modules_eval(self.net, cfg)
+            assert_pcum_frozen_batchnorm_eval(self.net, cfg)
 
     def eval(self):
         """ Set network to eval mode"""

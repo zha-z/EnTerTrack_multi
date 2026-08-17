@@ -1,0 +1,40 @@
+BASE_CONFIG: entertrack_threemdot_lasot_ft_cons.yaml
+MODEL_ROLE: c3r_c0_naive_compact
+FIXED_FINAL_EPOCH: 6
+MODEL:
+  PRETRAIN_FILE: /data/zjy/multi/output/entertrack_single_lasot_ft_cons/checkpoints/train/entertrack/entertrack_threemdot_lasot_ft_cons/EnTeRTrack_ep0004.pth.tar
+  PCUM:
+    ENABLED: false
+  C3R:
+    ENABLED: true
+    VARIANT: c0
+  USE_SEARCH_PROMPT: false
+TRAIN:
+  MULTIVIEW:
+    ENABLED: true
+  FREEZE_BACKBONE: true
+  FREEZE_HEAD: true
+  C3R:
+    ENABLED: true
+    FREEZE_LOCAL: true
+    PERTURBATIONS_ENABLED: false
+  PCUM:
+    USE_REAL_MULTIVIEW: false
+  VAL_EPOCH_INTERVAL: 1000000
+DATA:
+  TRAIN:
+    DATASETS_NAME: [THREEMDOT]
+    DATASETS_RATIO: [1]
+TEST:
+  SAVE_DIR: /data/zjy/output/c3r_c0
+  C3R:
+    ENABLED: true
+  PCUM:
+    USE_REMOTE: false
+    USE_REMOTE_VISIBLE_MASK: false
+  MOTION_STATE:
+    ENABLED: false
+  MCR:
+    ENABLED: false
+  COOP:
+    ENABLED: false

@@ -1,5 +1,9 @@
 import numpy as np
-import cv2
+try:
+    import cv2
+except ModuleNotFoundError:
+    cv2 = None
+from PIL import Image, ImageDraw, ImageFont
 
 ############## used for visulize eliminated tokens #################
 def get_keep_indices(decisions):
@@ -33,6 +37,25 @@ def pad_img(img):
     return im_bg
 
 
+def draw_text(img, text, xy):
+    if cv2 is not None:
+        cv2.putText(
+            img,
+            text,
+            xy,
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (0, 0, 0),
+            2,
+        )
+        return img
+
+    pil_img = Image.fromarray(np.asarray(img, dtype=np.uint8))
+    draw = ImageDraw.Draw(pil_img)
+    draw.text(xy, text, fill=(0, 0, 0), font=ImageFont.load_default())
+    return np.asarray(pil_img)
+
+
 def gen_visualization(image, mask_indices, patch_size=16):
     # image [224, 224, 3]
     # mask_indices, list of masked token indices
@@ -60,8 +83,7 @@ def gen_visualization(image, mask_indices, patch_size=16):
         keep_ratio = keep_num / total_tokens
         keep_ratios.append(keep_ratio)
 
-        cv2.putText(masked_img, f"keep: {keep_num} ({keep_ratio:.2%})", (10, 20),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+        masked_img = draw_text(masked_img, f"keep: {keep_num} ({keep_ratio:.2%})", (10, 20))
         stages.append(masked_img)
     imgs = [image] + stages
     imgs = [pad_img(img) for img in imgs]

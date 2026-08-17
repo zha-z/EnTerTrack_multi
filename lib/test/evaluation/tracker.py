@@ -1,6 +1,7 @@
 import importlib
 import os
 import json
+import hashlib
 from collections import OrderedDict
 from lib.test.evaluation.environment import env_settings
 import time
@@ -12,7 +13,26 @@ from lib.test.coop import CommunicationSimulator
 from lib.test.utils.pcum_diagnostics import (
     build_frame_diagnostic_row,
     prompt_cosine_similarity,
-    visibility_for_remote_selection,
+)
+from lib.test.utils.pcum_remote_ablation import RemotePromptAblator
+from lib.test.utils.pcum_remote_state import (
+    build_remote_state,
+    read_gt_visibility,
+    uses_gt_visibility,
+    validate_remote_state_source,
+)
+from lib.test.tracker.entertrack import validate_reliability_selector
+from lib.models.entertrack.pcum import validate_remote_aggregation
+from lib.test.evaluation.run_id import (
+    result_directory,
+    reserve_run_directory,
+    validate_run_id,
+)
+from lib.test.utils.c3r_inference import (
+    C3RFrameExchange,
+    C3RReceiverContext,
+    diagnostic_row as c3r_diagnostic_row,
+    target_session_hash,
 )
 
 from lib.utils.lmdb_utils import decode_img
@@ -47,6 +67,21 @@ def _pcum_bbox_motion(candidate):
     return norm_motion, scale_ratio
 
 
+def _pcum_motion_consistency(candidate, max_norm_motion=2.0):
+    """Prediction-only motion and scale consistency, without score reuse."""
+    motion = _pcum_bbox_motion(candidate)
+    if motion is None:
+        return None
+    norm_motion, scale_ratio = motion
+    max_norm_motion = max(float(max_norm_motion), 1e-6)
+    motion_conf = max(0.0, 1.0 - norm_motion / max_norm_motion)
+    scale_conf = max(
+        0.0,
+        1.0 - abs(np.log(max(scale_ratio, 1e-6))) / np.log(4.0),
+    )
+    return float(motion_conf * scale_conf)
+
+
 def _pcum_motion_reliability(candidate, max_norm_motion=2.0, apce_norm=200.0):
     """
     Conservative cross-view motion reliability.
@@ -54,12 +89,11 @@ def _pcum_motion_reliability(candidate, max_norm_motion=2.0, apce_norm=200.0):
     This does not transfer peer coordinates across cameras. It only checks
     whether a peer's own frame-to-frame motion is plausible and confident.
     """
-    motion = _pcum_bbox_motion(candidate)
-    if motion is None:
+    motion_consistency = _pcum_motion_consistency(
+        candidate, max_norm_motion=max_norm_motion
+    )
+    if motion_consistency is None:
         return 0.0
-
-    norm_motion, scale_ratio = motion
-    max_norm_motion = max(float(max_norm_motion), 1e-6)
     apce_norm = max(float(apce_norm), 1e-6)
 
     score = candidate.get("max_score", candidate.get("score", 0.0))
@@ -68,13 +102,9 @@ def _pcum_motion_reliability(candidate, max_norm_motion=2.0, apce_norm=200.0):
     apce = candidate.get("apce", 0.0)
     if torch.is_tensor(apce):
         apce = apce.item()
-    visible = 1.0 if candidate.get("visible", True) is not False else 0.0
-
     score_conf = max(0.0, min(1.0, float(score)))
     apce_conf = max(0.0, min(1.0, float(apce) / apce_norm))
-    motion_conf = max(0.0, 1.0 - norm_motion / max_norm_motion)
-    scale_conf = max(0.0, 1.0 - abs(np.log(max(scale_ratio, 1e-6))) / np.log(4.0))
-    return float(score_conf * apce_conf * motion_conf * scale_conf * visible)
+    return float(score_conf * apce_conf * motion_consistency)
 
 
 def trackerlist(name: str, parameter_name: str, dataset_name: str, run_ids = None, display_name: str = None,
@@ -86,7 +116,7 @@ def trackerlist(name: str, parameter_name: str, dataset_name: str, run_ids = Non
         run_ids: A single or list of run_ids.
         display_name: Name to be displayed in the result plots.
     """
-    if run_ids is None or isinstance(run_ids, int):
+    if run_ids is None or isinstance(run_ids, (int, str)):
         run_ids = [run_ids]
     return [Tracker(name, parameter_name, dataset_name, run_id, display_name, result_only) for run_id in run_ids]
 
@@ -100,21 +130,46 @@ class Tracker:
         display_name: Name to be displayed in the result plots.
     """
 
-    def __init__(self, name: str, parameter_name: str, dataset_name: str, run_id: int = None, display_name: str = None,
-                 result_only=False):
-        assert run_id is None or isinstance(run_id, int)
+    def __init__(self, name: str, parameter_name: str, dataset_name: str,
+                 run_id=None, display_name: str = None, result_only=False,
+                 checkpoint_override=None, no_gt_inference=False,
+                 c3r_instrumentation=False, instrumentation_fold_id=-1,
+                 temporal_gate_rollout_capture=False,
+                 temporal_gate_counterfactual_diagnostics=False,
+                 remote_information_diagnostics=False):
+        run_id = validate_run_id(run_id)
 
         self.name = name
         self.parameter_name = parameter_name
         self.dataset_name = dataset_name
         self.run_id = run_id
         self.display_name = display_name
+        self.checkpoint_override = checkpoint_override
+        self.no_gt_inference = bool(no_gt_inference)
+        self.c3r_instrumentation = bool(c3r_instrumentation)
+        self.instrumentation_fold_id = int(instrumentation_fold_id)
+        self.temporal_gate_rollout_capture = bool(
+            temporal_gate_rollout_capture)
+        self.temporal_gate_counterfactual_diagnostics = bool(
+            temporal_gate_counterfactual_diagnostics)
+        self.remote_information_diagnostics = bool(
+            remote_information_diagnostics)
+        if (self.remote_information_diagnostics
+                and not self.temporal_gate_counterfactual_diagnostics):
+            raise ValueError(
+                "remote-information diagnostics require counterfactual diagnostics")
+        if (self.temporal_gate_counterfactual_diagnostics
+                and not self.temporal_gate_rollout_capture):
+            raise ValueError(
+                "counterfactual diagnostics require rollout capture")
 
         env = env_settings()
-        if self.run_id is None:
-            self.results_dir = '{}/{}/{}'.format(env.results_path, self.name, self.parameter_name)
-        else:
-            self.results_dir = '{}/{}/{}_{:03d}'.format(env.results_path, self.name, self.parameter_name, self.run_id)
+        self.results_dir = str(result_directory(
+            env.results_path,
+            self.name,
+            self.parameter_name,
+            self.run_id,
+        ))
         if result_only:
             self.results_dir = '{}/{}'.format(env.results_path, self.name)
 
@@ -314,7 +369,46 @@ class Tracker:
         """Get parameters."""
         param_module = importlib.import_module('lib.test.parameter.{}'.format(self.name))
         params = param_module.parameters(self.parameter_name)
+        if self.checkpoint_override is not None:
+            params.checkpoint = str(self.checkpoint_override)
+        params.run_id = self.run_id
+        params.no_gt_inference = self.no_gt_inference
+        params.c3r_instrumentation = bool(
+            self.c3r_instrumentation or self.temporal_gate_rollout_capture)
+        params.instrumentation_fold_id = self.instrumentation_fold_id
+        params.temporal_gate_rollout_capture = self.temporal_gate_rollout_capture
+        params.temporal_gate_counterfactual_diagnostics = bool(
+            self.temporal_gate_counterfactual_diagnostics)
+        params.remote_information_diagnostics = bool(
+            self.remote_information_diagnostics)
         return params
+
+    def reserve_results_dir(self):
+        """Reserve a never-before-used result path for a formal run."""
+        params = self.get_parameters()
+        checkpoint = str(params.checkpoint)
+        if not os.path.isfile(checkpoint):
+            raise FileNotFoundError(
+                "tracker checkpoint does not exist: {}".format(checkpoint))
+        digest = hashlib.sha256()
+        with open(checkpoint, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        identity = {
+            "tracker_name": self.name,
+            "parameter_name": self.parameter_name,
+            "dataset_name": self.dataset_name,
+            "runid": self.run_id,
+            "checkpoint": checkpoint,
+            "checkpoint_sha256": digest.hexdigest(),
+            "split_manifest": os.environ.get("THREEMDOT_CV_SPLIT_FILE", ""),
+            "no_gt_inference": self.no_gt_inference,
+            "c3r_instrumentation": self.c3r_instrumentation,
+            "instrumentation_fold_id": self.instrumentation_fold_id,
+            "remote_information_diagnostics":
+                self.remote_information_diagnostics,
+        }
+        return reserve_run_directory(self.results_dir, identity)
 
     def _read_image(self, image_file: str):
         if isinstance(image_file, str):
@@ -699,21 +793,88 @@ class Tracker:
                            seq_a, seq_b, seq_c,
                            init_info_a, init_info_b, init_info_c):
         """
-        ThreeMDOT 三机测试入口，但当前版本不做多机融合。
-
-        当前逻辑：
-        1. tracker  只跟踪 seq_a；
-        2. tracker2 只跟踪 seq_b；
-        3. tracker3 只跟踪 seq_c；
-        4. 不传 prompt；
-        5. 不用多模板；
-        6. 不用跨机重检测；
-        7. 不用 B/C 图像辅助 A。
+        ThreeMDOT three-view entry. Legacy/default configs keep the independent
+        path. Formal C3R configs use an explicit typed packet exchange after
+        each view has completed its ordinary local candidate.
         """
 
         output_a = {'target_bbox': [], 'time': [], 'max_score': [], 'APCE': []}
         output_b = {'target_bbox': [], 'time': [], 'max_score': [], 'APCE': []}
         output_c = {'target_bbox': [], 'time': [], 'max_score': [], 'APCE': []}
+        sequences = (seq_a, seq_b, seq_c)
+        target_ids = tuple(seq.name.rsplit('-', 1)[0] for seq in sequences)
+        if len(set(target_ids)) != 1:
+            raise ValueError("C3R three-view runner received mixed targets")
+        target_id = target_ids[0]
+        c3r_model_enabled = bool(getattr(
+            getattr(tracker.cfg.MODEL, "C3R", None), "ENABLED", False))
+        c3r_test_enabled = bool(getattr(
+            getattr(tracker.cfg.TEST, "C3R", None), "ENABLED", False))
+        c3r_remote_enabled = bool(
+            c3r_model_enabled
+            and c3r_test_enabled
+            and all(hasattr(item, "c3r_local_candidate") for item in (
+                tracker, tracker2, tracker3))
+        )
+        c3r_instrumentation_enabled = bool(
+            c3r_remote_enabled
+            and all(bool(getattr(item.params, "c3r_instrumentation", False))
+                    for item in (tracker, tracker2, tracker3)))
+        if c3r_remote_enabled and any(
+                bool(getattr(item.params, "c3r_instrumentation", False))
+                for item in (tracker, tracker2, tracker3)) and not c3r_instrumentation_enabled:
+            raise ValueError("C3R instrumentation must match across all three views")
+        formal_no_gt = any(bool(getattr(item.params, "no_gt_inference", False))
+                           for item in (tracker, tracker2, tracker3))
+        if formal_no_gt and not all(
+                bool(getattr(item.params, "no_gt_inference", False))
+                for item in (tracker, tracker2, tracker3)):
+            raise ValueError("no-GT mode must match across all three views")
+        if c3r_remote_enabled:
+            output_a['c3r_diagnostics'] = []
+            output_b['c3r_diagnostics'] = []
+            output_c['c3r_diagnostics'] = []
+            if c3r_instrumentation_enabled:
+                output_a['c3r_source_instrumentation'] = []
+                output_b['c3r_source_instrumentation'] = []
+                output_c['c3r_source_instrumentation'] = []
+                output_a['c3r_aggregate_instrumentation'] = []
+                output_b['c3r_aggregate_instrumentation'] = []
+                output_c['c3r_aggregate_instrumentation'] = []
+            print(
+                "[C3R inference] enabled=true variant={} packet_bytes=320 "
+                "uses_gt=false target={}".format(
+                    str(tracker.network.c3r.variant), target_id))
+        mcr_cfg = getattr(tracker.cfg.TEST, "MCR", None)
+        mcr_enabled = bool(getattr(mcr_cfg, "ENABLED", False))
+        if mcr_enabled:
+            output_a['mcr_diagnostics'] = []
+            output_b['mcr_diagnostics'] = []
+            output_c['mcr_diagnostics'] = []
+            print(
+                "[MCR-v0] enabled=true shadow_only={} uses_gt_visibility=false "
+                "global_enabled={} sequence={}".format(
+                    str(bool(getattr(mcr_cfg, "SHADOW_ONLY", True))).lower(),
+                    str(bool(getattr(mcr_cfg, "GLOBAL_ENABLED", False))).lower(),
+                    getattr(seq_a, "name", "unknown"),
+                )
+            )
+        motion_cfg = getattr(tracker.cfg.TEST, "MOTION_STATE", None)
+        motion_log_enabled = bool(
+            getattr(motion_cfg, "ENABLED", False)
+            and getattr(motion_cfg, "LOG_ENABLED", False)
+        )
+        if motion_log_enabled:
+            output_a['motion_state_diagnostics'] = []
+            output_b['motion_state_diagnostics'] = []
+            output_c['motion_state_diagnostics'] = []
+            print(
+                "[Motion state shadow] enabled=true shadow_only={} "
+                "uses_gt_visibility=false sequence={}".format(
+                    str(bool(getattr(motion_cfg, "SHADOW_ONLY", True))).lower(),
+                    getattr(seq_a, "name", "unknown"),
+                )
+            )
         diagnostics_cfg = getattr(
             getattr(tracker.cfg.TEST, "PCUM", None),
             "FRAME_DIAGNOSTICS",
@@ -742,6 +903,20 @@ class Tracker:
             output_a['pcum_decision'] = []
             output_b['pcum_decision'] = []
             output_c['pcum_decision'] = []
+        selector_mode = validate_reliability_selector(getattr(
+            getattr(tracker.cfg.TEST, "PCUM", None),
+            "RELIABILITY_SELECTOR",
+            "none",
+        ))
+        selector_diagnostics = bool(getattr(
+            getattr(tracker.cfg.TEST, "PCUM", None),
+            "SELECTOR_DIAGNOSTICS",
+            True,
+        ))
+        if selector_diagnostics and selector_mode != "none":
+            output_a['pcum_selector'] = []
+            output_b['pcum_selector'] = []
+            output_c['pcum_selector'] = []
 
         if tracker.params.save_all_boxes:
             output_a['all_boxes'] = []
@@ -760,11 +935,29 @@ class Tracker:
                 if key in tracker_out or val is not None:
                     output[key].append(val)
 
+        def _behavior_output(tracker_out):
+            return OrderedDict(
+                (key, value) for key, value in tracker_out.items()
+                if key not in (
+                    "motion_state_diagnostics", "mcr_diagnostics",
+                    "c3r_diagnostics", "c3r_source_instrumentation",
+                    "c3r_aggregate_instrumentation")
+            )
+
         def _to_float(x):
             return x.item() if torch.is_tensor(x) else x
 
         def _empty_pcum_decision():
             return [0.0] * 8
+
+        def _empty_remote_weight_record():
+            return [float("nan")] * 12
+
+        def _empty_remote_suppression_record():
+            return [float("nan")] * 5
+
+        def _empty_pcum_selector():
+            return [0.0, 0.0] + [float("nan")] * 5 + [0.0, 0.0, 0.0]
 
         def _payload(out, score, apce):
             return {
@@ -879,12 +1072,89 @@ class Tracker:
             return out, score, apce
 
         pcum_test_cfg = getattr(tracker.cfg.TEST, "PCUM", None)
+        pcum_model_enabled = bool(
+            getattr(getattr(tracker.cfg.MODEL, "PCUM", None), "ENABLED", False)
+        )
         pcum_remote_enabled = (
             bool(_get_cfg_value(pcum_test_cfg, "USE_REMOTE", False))
-            and bool(getattr(getattr(tracker.cfg.MODEL, "PCUM", None), "ENABLED", False))
+            and pcum_model_enabled
             and hasattr(tracker, "pcum_local_candidate")
             and hasattr(tracker, "pcum_track_with_remote")
         )
+        remote_ablation_mode = str(_get_cfg_value(
+            pcum_test_cfg, "REMOTE_ABLATION", "normal"
+        )).lower()
+        remote_ablation_offset = int(_get_cfg_value(
+            pcum_test_cfg, "REMOTE_ABLATION_OFFSET", 10
+        ))
+        remote_state_source = validate_remote_state_source(_get_cfg_value(
+            pcum_test_cfg, "REMOTE_STATE_SOURCE", "tracker"
+        ))
+        pcum_model_cfg = getattr(tracker.cfg.MODEL, "PCUM", None)
+        remote_aggregation_mode = validate_remote_aggregation(_get_cfg_value(
+            pcum_model_cfg, "REMOTE_AGGREGATION", "mean"
+        ))
+        remote_weight_temperature = float(_get_cfg_value(
+            pcum_model_cfg, "REMOTE_WEIGHT_TEMPERATURE", 0.25
+        ))
+        remote_weight_diagnostics = bool(_get_cfg_value(
+            pcum_model_cfg, "REMOTE_WEIGHT_DIAGNOSTICS", True
+        ))
+        remote_suppression_enabled = bool(_get_cfg_value(
+            pcum_model_cfg, "REMOTE_SUPPRESSION_ENABLED", False
+        ))
+        remote_uses_gt_visibility = uses_gt_visibility(
+            remote_state_source,
+            use_remote_visible_mask,
+        )
+        remote_prompt_ablator = RemotePromptAblator(
+            mode=remote_ablation_mode,
+            offset=remote_ablation_offset,
+        )
+        print(
+            "[PCUM remote state] source={} uses_gt_visibility={} sequence={}".format(
+                remote_state_source,
+                str(remote_uses_gt_visibility).lower(),
+                getattr(seq_a, "name", "unknown"),
+            )
+        )
+        if pcum_remote_enabled:
+            if remote_weight_diagnostics:
+                output_a['pcum_remote_weights'] = []
+                output_b['pcum_remote_weights'] = []
+                output_c['pcum_remote_weights'] = []
+            if remote_suppression_enabled:
+                output_a['pcum_remote_suppression'] = []
+                output_b['pcum_remote_suppression'] = []
+                output_c['pcum_remote_suppression'] = []
+            print(
+                "[PCUM remote ablation] mode={} offset={} sequence={}".format(
+                    remote_ablation_mode,
+                    remote_ablation_offset,
+                    getattr(seq_a, "name", "unknown"),
+                )
+            )
+            if remote_aggregation_mode != "mean":
+                print(
+                    "[PCUM remote aggregation] mode={} temperature={} sequence={}".format(
+                        remote_aggregation_mode,
+                        remote_weight_temperature,
+                        getattr(seq_a, "name", "unknown"),
+                    )
+                )
+            if selector_mode != "none":
+                print(
+                    "[PCUM reliability selector] mode={} margin={} motion_threshold={} sequence={}".format(
+                        selector_mode,
+                        float(_get_cfg_value(pcum_test_cfg, "SELECTOR_MARGIN", 0.0)),
+                        float(_get_cfg_value(
+                            pcum_test_cfg,
+                            "SELECTOR_MOTION_THRESHOLD",
+                            0.0,
+                        )),
+                        getattr(seq_a, "name", "unknown"),
+                    )
+                )
 
         def _candidate_score(candidate):
             return _to_float(candidate["max_score"])
@@ -901,6 +1171,13 @@ class Tracker:
                 candidate,
                 max_norm_motion=max_norm_motion,
                 apce_norm=apce_norm,
+            )
+
+        def _motion_consistency(candidate):
+            max_norm_motion = float(_get_cfg_value(
+                pcum_test_cfg, "MOTION_REDETECT_MAX_NORM_MOTION", 2.0))
+            return _pcum_motion_consistency(
+                candidate, max_norm_motion=max_norm_motion
             )
 
         def _candidate_is_local_low(candidate):
@@ -921,11 +1198,7 @@ class Tracker:
             if candidate is None or candidate.get("local_prompt", None) is None:
                 return False
             if use_remote_visible_mask:
-                candidate_visible = (
-                    visibility if frame_diagnostics_enabled
-                    else candidate.get("visible", True)
-                )
-                if candidate_visible is False:
+                if visibility is False:
                     return False
             score_thr = float(_get_cfg_value(pcum_test_cfg, "REMOTE_SCORE_THR", 0.0))
             apce_thr = float(_get_cfg_value(pcum_test_cfg, "REMOTE_APCE_THR", 0.0))
@@ -953,55 +1226,55 @@ class Tracker:
                 return [], None, []
 
             target_device = target_tracker.output_window.device
-            remote_prompts = [
-                candidate["local_prompt"].detach().to(device=target_device)
-                for _, candidate in peers
-            ]
+            if remote_ablation_mode == "normal":
+                # Keep the default path byte-for-byte equivalent to the
+                # pre-ablation implementation.
+                remote_prompts = [
+                    candidate["local_prompt"].detach().to(device=target_device)
+                    for _, candidate in peers
+                ]
+            else:
+                remote_prompts = [
+                    remote_prompt_ablator.apply(
+                        source_index,
+                        candidate["local_prompt"],
+                        target_device=target_device,
+                    )
+                    for source_index, candidate in peers
+                ]
             remote_scores = [
                 max(0.0, min(1.0, float(_candidate_score(candidate))))
                 for _, candidate in peers
             ]
-            if frame_diagnostics_enabled:
-                # In formal mode no visibility annotation is read before inference.
-                # In oracle mode invisible peers have already been filtered out.
-                remote_visible = [1.0] * len(peers)
-            else:
-                remote_visible = [
-                    1.0 if candidate.get("visible", True) is not False else 0.0
-                    for _, candidate in peers
-                ]
-            remote_confidence = [
-                remote_scores[i] * remote_visible[i]
-                for i in range(len(remote_scores))
+            apce_norm = max(float(_get_cfg_value(
+                pcum_test_cfg, "MOTION_REDETECT_APCE_NORM", 200.0)), 1e-6)
+            remote_apces = [
+                max(0.0, min(1.0, float(_candidate_apce(candidate)) / apce_norm))
+                for _, candidate in peers
             ]
-            remote_motion = [_motion_reliability(candidate) for _, candidate in peers]
-            if bool(_get_cfg_value(pcum_test_cfg, "USE_MOTION_CONFIDENCE", False)):
-                remote_confidence = [
-                    remote_confidence[i] * (0.5 + 0.5 * remote_motion[i])
-                    for i in range(len(remote_confidence))
+            remote_bbox_scores = [
+                candidate.get("bbox_score", None) for _, candidate in peers
+            ]
+            remote_motion = [_motion_consistency(candidate) for _, candidate in peers]
+            peer_visibility = None
+            if remote_state_source == "gt_legacy":
+                peer_visibility = [
+                    visibility_by_index[index] for index, _ in peers
                 ]
-            remote_state = {
-                "score": torch.tensor(
-                    [sum(remote_scores) / max(1, len(remote_scores))],
-                    device=target_device,
-                    dtype=torch.float32
-                ),
-                "visible": torch.tensor(
-                    [sum(remote_visible) / max(1, len(remote_visible))],
-                    device=target_device,
-                    dtype=torch.float32
-                ),
-                "confidence": torch.tensor(
-                    [sum(remote_confidence) / max(1, len(remote_confidence))],
-                    device=target_device,
-                    dtype=torch.float32
-                ),
-                "motion_reliability": torch.tensor(
-                    [sum(remote_motion) / max(1, len(remote_motion))],
-                    device=target_device,
-                    dtype=torch.float32
-                ),
-            }
+            remote_state = build_remote_state(
+                scores=remote_scores,
+                motion_reliabilities=remote_motion,
+                source=remote_state_source,
+                device=target_device,
+                use_motion_confidence=bool(_get_cfg_value(
+                    pcum_test_cfg, "USE_MOTION_CONFIDENCE", False
+                )),
+                gt_visibility=peer_visibility,
+                apces=remote_apces,
+                bbox_scores=remote_bbox_scores,
+                valid=[True] * len(peers),
+                uav_indices=[index for index, _ in peers],
+            )
             return remote_prompts, remote_state, [index for index, _ in peers]
 
         uav_ids = ["A", "B", "C"]
@@ -1116,9 +1389,9 @@ class Tracker:
         if out_c is None:
             out_c = {}
 
-        prev_output_a = OrderedDict(out_a)
-        prev_output_b = OrderedDict(out_b)
-        prev_output_c = OrderedDict(out_c)
+        prev_output_a = _behavior_output(out_a)
+        prev_output_b = _behavior_output(out_b)
+        prev_output_c = _behavior_output(out_c)
 
         init_default_a = {
             'target_bbox': init_info_a.get('init_bbox'),
@@ -1139,6 +1412,65 @@ class Tracker:
             'max_score': 0,
             'APCE': 0
         }
+
+        if c3r_remote_enabled:
+            for receiver_id, active_tracker, init_default in (
+                (0, tracker, init_default_a),
+                (1, tracker2, init_default_b),
+                (2, tracker3, init_default_c),
+            ):
+                active_tracker.reset_temporal_gate(
+                    target_id=target_id, receiver_id=receiver_id)
+                init_context = C3RReceiverContext.for_frame(
+                    target_id=target_id,
+                    receiver_id=receiver_id,
+                    frame_id=0,
+                    last_frame_by_sender=active_tracker.c3r_last_frame_by_sender,
+                )
+                init_default['c3r_diagnostics'] = c3r_diagnostic_row(
+                    target_id=target_id,
+                    receiver_id=receiver_id,
+                    context=init_context,
+                    sent_packets=0,
+                    received_packets=0,
+                    collaboration={"used_remote": False, "accepted_count": 0},
+                )
+                if c3r_instrumentation_enabled:
+                    initial_bbox = [float(value) for value in init_default['target_bbox']]
+                    init_default['c3r_source_instrumentation'] = []
+                    init_default['c3r_aggregate_instrumentation'] = {
+                        "fold_id": int(getattr(
+                            active_tracker.params, "instrumentation_fold_id", -1)),
+                        "target_id": target_id,
+                        "sequence_id": "{}-{}".format(target_id, receiver_id + 1),
+                        "receiver_view": receiver_id,
+                        "frame_id": 0,
+                        "timestamp_ms": 0,
+                        "local_bbox_xywh": initial_bbox,
+                        "c1_bbox_xywh": initial_bbox,
+                        "tracker_state_before_xywh": initial_bbox,
+                        "tracker_state_after_xywh": initial_bbox,
+                        "local_score": 0.0,
+                        "c1_score": 0.0,
+                        "local_confidence": 0.0,
+                        "c1_confidence": 0.0,
+                        "local_apce": 0.0,
+                        "c1_apce": 0.0,
+                        "local_response_quality": [],
+                        "c1_response_quality": [],
+                        "uses_gt": False,
+                        "sender_count": 0,
+                        "accepted_sender_views": [],
+                        "aggregation_gate_mean": 0.0,
+                        "aggregation_gate_sum": 0.0,
+                        "aggregate_residual_l2": 0.0,
+                        "aggregate_residual_local_ratio": 0.0,
+                        "aggregate_residual_local_cosine": 0.0,
+                        "feature_norm_before_fusion": 0.0,
+                        "feature_norm_after_fusion": 0.0,
+                        "zero_aggregate_residual": True,
+                        "abnormal_aggregate_residual": False,
+                    }
 
         if frame_diagnostics_enabled:
             for init_default, seq, uav in (
@@ -1172,6 +1504,21 @@ class Tracker:
             init_default_a['pcum_decision'] = _empty_pcum_decision()
             init_default_b['pcum_decision'] = _empty_pcum_decision()
             init_default_c['pcum_decision'] = _empty_pcum_decision()
+        if pcum_remote_enabled and remote_weight_diagnostics:
+            init_default_a['pcum_remote_weights'] = _empty_remote_weight_record()
+            init_default_b['pcum_remote_weights'] = _empty_remote_weight_record()
+            init_default_c['pcum_remote_weights'] = _empty_remote_weight_record()
+        if pcum_remote_enabled and remote_suppression_enabled:
+            init_default_a['pcum_remote_suppression'] = (
+                _empty_remote_suppression_record())
+            init_default_b['pcum_remote_suppression'] = (
+                _empty_remote_suppression_record())
+            init_default_c['pcum_remote_suppression'] = (
+                _empty_remote_suppression_record())
+        if pcum_remote_enabled and selector_diagnostics and selector_mode != "none":
+            init_default_a['pcum_selector'] = _empty_pcum_selector()
+            init_default_b['pcum_selector'] = _empty_pcum_selector()
+            init_default_c['pcum_selector'] = _empty_pcum_selector()
 
         if tracker.params.save_all_boxes:
             init_default_a['all_boxes'] = out_a['all_boxes']
@@ -1201,19 +1548,12 @@ class Tracker:
             diagnostic_row_a = None
             diagnostic_row_b = None
             diagnostic_row_c = None
-            if not frame_diagnostics_enabled:
-                if getattr(seq_a, "target_visible", None) is not None:
-                    info_a["target_visible"] = bool(seq_a.target_visible[frame_num])
-                if getattr(seq_b, "target_visible", None) is not None:
-                    info_b["target_visible"] = bool(seq_b.target_visible[frame_num])
-                if getattr(seq_c, "target_visible", None) is not None:
-                    info_c["target_visible"] = bool(seq_c.target_visible[frame_num])
 
             info_a['previous_output'] = prev_output_a
             info_b['previous_output'] = prev_output_b
             info_c['previous_output'] = prev_output_c
 
-            if not frame_diagnostics_enabled:
+            if not frame_diagnostics_enabled and not formal_no_gt:
                 if len(seq_a.ground_truth_rect) > 1:
                     info_a['gt_bbox'] = seq_a.ground_truth_rect[frame_num]
                 if len(seq_b.ground_truth_rect) > 1:
@@ -1221,7 +1561,141 @@ class Tracker:
                 if len(seq_c.ground_truth_rect) > 1:
                     info_c['gt_bbox'] = seq_c.ground_truth_rect[frame_num]
 
-            if pcum_remote_enabled:
+            if formal_no_gt:
+                forbidden = {
+                    "gt_bbox", "target_visible", "visibility", "oracle_mask",
+                    "test_iou",
+                }
+                for info in (info_a, info_b, info_c):
+                    present = forbidden.intersection(info)
+                    if present:
+                        raise RuntimeError(
+                            "no-GT inference received forbidden fields: {}".format(
+                                sorted(present)))
+
+            fcvc_enabled = bool(
+                getattr(tracker, "fcvc_enabled", False)
+                and getattr(tracker2, "fcvc_enabled", False)
+                and getattr(tracker3, "fcvc_enabled", False)
+            )
+
+            if fcvc_enabled:
+                start_time_a = time.time()
+                candidate_a = tracker.fcvc_local_candidate(image_a)
+                local_time_a = time.time() - start_time_a
+                start_time_b = time.time()
+                candidate_b = tracker2.fcvc_local_candidate(image_b)
+                local_time_b = time.time() - start_time_b
+                start_time_c = time.time()
+                candidate_c = tracker3.fcvc_local_candidate(image_c)
+                local_time_c = time.time() - start_time_c
+
+                bundle_a = tracker.fcvc_sender_bundle(candidate_a, 1, frame_num)
+                bundle_b = tracker2.fcvc_sender_bundle(candidate_b, 2, frame_num)
+                bundle_c = tracker3.fcvc_sender_bundle(candidate_c, 3, frame_num)
+
+                start_time_a = time.time()
+                collab_a = tracker.fcvc_collaborative_candidate(
+                    candidate_a, (bundle_b, bundle_c))
+                out_a, max_score_a, response_APCE_a = tracker.fcvc_finalize_frame(
+                    candidate_a, collab_a, info=info_a, debug_name="a")
+                time_a = local_time_a + (time.time() - start_time_a)
+
+                start_time_b = time.time()
+                collab_b = tracker2.fcvc_collaborative_candidate(
+                    candidate_b, (bundle_a, bundle_c))
+                out_b, max_score_b, response_APCE_b = tracker2.fcvc_finalize_frame(
+                    candidate_b, collab_b, info=info_b, debug_name="b")
+                time_b = local_time_b + (time.time() - start_time_b)
+
+                start_time_c = time.time()
+                collab_c = tracker3.fcvc_collaborative_candidate(
+                    candidate_c, (bundle_a, bundle_b))
+                out_c, max_score_c, response_APCE_c = tracker3.fcvc_finalize_frame(
+                    candidate_c, collab_c, info=info_c, debug_name="c")
+                time_c = local_time_c + (time.time() - start_time_c)
+
+                score_a_val = _to_float(max_score_a)
+                score_b_val = _to_float(max_score_b)
+                score_c_val = _to_float(max_score_c)
+
+                apce_a_val = _to_float(response_APCE_a)
+                apce_b_val = _to_float(response_APCE_b)
+                apce_c_val = _to_float(response_APCE_c)
+
+                payload_a = _payload(out_a, score_a_val, apce_a_val)
+                payload_b = _payload(out_b, score_b_val, apce_b_val)
+                payload_c = _payload(out_c, score_c_val, apce_c_val)
+                _exchange_messages(frame_num, {0: payload_a, 1: payload_b, 2: payload_c})
+
+            elif c3r_remote_enabled:
+                frame_interval_ms = int(getattr(
+                    getattr(tracker.cfg.TEST, "C3R", None),
+                    "FRAME_INTERVAL_MS", 33))
+                timestamp_ms = int(frame_num) * frame_interval_ms
+
+                start_time_a = time.time()
+                candidate_a = tracker.c3r_local_candidate(image_a)
+                local_time_a = time.time() - start_time_a
+                start_time_b = time.time()
+                candidate_b = tracker2.c3r_local_candidate(image_b)
+                local_time_b = time.time() - start_time_b
+                start_time_c = time.time()
+                candidate_c = tracker3.c3r_local_candidate(image_c)
+                local_time_c = time.time() - start_time_c
+
+                records = (
+                    tracker.c3r_build_packet(
+                        candidate_a, target_id, 0, frame_num, timestamp_ms),
+                    tracker2.c3r_build_packet(
+                        candidate_b, target_id, 1, frame_num, timestamp_ms),
+                    tracker3.c3r_build_packet(
+                        candidate_c, target_id, 2, frame_num, timestamp_ms),
+                )
+                exchange = C3RFrameExchange(
+                    target_id=target_id,
+                    sequence_hash=target_session_hash(target_id),
+                    frame_id=frame_num,
+                    timestamp_ms=timestamp_ms,
+                    records=records,
+                )
+
+                contexts = (
+                    C3RReceiverContext.for_frame(
+                        target_id, 0, frame_num, frame_interval_ms,
+                        tracker.c3r_last_frame_by_sender),
+                    C3RReceiverContext.for_frame(
+                        target_id, 1, frame_num, frame_interval_ms,
+                        tracker2.c3r_last_frame_by_sender),
+                    C3RReceiverContext.for_frame(
+                        target_id, 2, frame_num, frame_interval_ms,
+                        tracker3.c3r_last_frame_by_sender),
+                )
+
+                start_time_a = time.time()
+                out_a, max_score_a, response_APCE_a = tracker.c3r_track_with_packets(
+                    info_a, candidate_a, exchange.packets_for(0), contexts[0],
+                    sent_packets=1, debug_name="c3r-a")
+                time_a = local_time_a + (time.time() - start_time_a)
+                start_time_b = time.time()
+                out_b, max_score_b, response_APCE_b = tracker2.c3r_track_with_packets(
+                    info_b, candidate_b, exchange.packets_for(1), contexts[1],
+                    sent_packets=1, debug_name="c3r-b")
+                time_b = local_time_b + (time.time() - start_time_b)
+                start_time_c = time.time()
+                out_c, max_score_c, response_APCE_c = tracker3.c3r_track_with_packets(
+                    info_c, candidate_c, exchange.packets_for(2), contexts[2],
+                    sent_packets=1, debug_name="c3r-c")
+                time_c = local_time_c + (time.time() - start_time_c)
+
+                score_a_val = _to_float(max_score_a)
+                score_b_val = _to_float(max_score_b)
+                score_c_val = _to_float(max_score_c)
+                apce_a_val = _to_float(response_APCE_a)
+                apce_b_val = _to_float(response_APCE_b)
+                apce_c_val = _to_float(response_APCE_c)
+
+            elif pcum_remote_enabled:
                 start_time_a = time.time()
                 candidate_a = tracker.pcum_local_candidate(image_a)
                 local_time_a = time.time() - start_time_a
@@ -1238,16 +1712,17 @@ class Tracker:
                 candidate_c["prev_bbox"] = copy.deepcopy(tracker3.state)
 
                 candidates = [candidate_a, candidate_b, candidate_c]
-                visibility_for_selection = visibility_for_remote_selection(
-                    frame_diagnostics_enabled,
+                if remote_ablation_mode == "temporal_shuffle":
+                    remote_prompt_ablator.record([
+                        candidate.get("local_prompt", None)
+                        for candidate in candidates
+                    ])
+                visibility_for_selection = read_gt_visibility(
+                    remote_state_source,
                     use_remote_visible_mask,
                     [seq_a, seq_b, seq_c],
                     frame_num,
                 )
-                if not frame_diagnostics_enabled:
-                    candidates[0]["visible"] = info_a.get("target_visible", True)
-                    candidates[1]["visible"] = info_b.get("target_visible", True)
-                    candidates[2]["visible"] = info_c.get("target_visible", True)
 
                 remote_prompts_a, remote_state_a, remote_indices_a = _remote_inputs_for(
                     0, candidates, tracker, visibility_for_selection
@@ -1385,9 +1860,9 @@ class Tracker:
                     peer_payloads_c
                 )
 
-            prev_output_a = OrderedDict(out_a)
-            prev_output_b = OrderedDict(out_b)
-            prev_output_c = OrderedDict(out_c)
+            prev_output_a = _behavior_output(out_a)
+            prev_output_b = _behavior_output(out_b)
+            prev_output_c = _behavior_output(out_c)
 
             _store_outputs(
                 output_a,
@@ -1398,6 +1873,12 @@ class Tracker:
                     'APCE': apce_a_val,
                     'pcum_decision': _empty_pcum_decision() if save_pcum_decision_log else None,
                     'pcum_frame_diagnostics': diagnostic_row_a,
+                    'pcum_remote_weights': _empty_remote_weight_record()
+                    if pcum_remote_enabled and remote_weight_diagnostics else None,
+                    'pcum_remote_suppression': _empty_remote_suppression_record()
+                    if pcum_remote_enabled and remote_suppression_enabled else None,
+                    'pcum_selector': _empty_pcum_selector()
+                    if pcum_remote_enabled and selector_diagnostics and selector_mode != "none" else None,
                 }
             )
 
@@ -1410,6 +1891,12 @@ class Tracker:
                     'APCE': apce_b_val,
                     'pcum_decision': _empty_pcum_decision() if save_pcum_decision_log else None,
                     'pcum_frame_diagnostics': diagnostic_row_b,
+                    'pcum_remote_weights': _empty_remote_weight_record()
+                    if pcum_remote_enabled and remote_weight_diagnostics else None,
+                    'pcum_remote_suppression': _empty_remote_suppression_record()
+                    if pcum_remote_enabled and remote_suppression_enabled else None,
+                    'pcum_selector': _empty_pcum_selector()
+                    if pcum_remote_enabled and selector_diagnostics and selector_mode != "none" else None,
                 }
             )
 
@@ -1422,6 +1909,12 @@ class Tracker:
                     'APCE': apce_c_val,
                     'pcum_decision': _empty_pcum_decision() if save_pcum_decision_log else None,
                     'pcum_frame_diagnostics': diagnostic_row_c,
+                    'pcum_remote_weights': _empty_remote_weight_record()
+                    if pcum_remote_enabled and remote_weight_diagnostics else None,
+                    'pcum_remote_suppression': _empty_remote_suppression_record()
+                    if pcum_remote_enabled and remote_suppression_enabled else None,
+                    'pcum_selector': _empty_pcum_selector()
+                    if pcum_remote_enabled and selector_diagnostics and selector_mode != "none" else None,
                 }
             )
 
@@ -1438,6 +1931,11 @@ class Tracker:
                 output_c.pop(key)
 
         _save_comm_stats(len(output_a.get('time', [])))
+
+        if c3r_remote_enabled:
+            output_a['c3r_comm_summary'] = tracker.c3r_accounting_report()
+            output_b['c3r_comm_summary'] = tracker2.c3r_accounting_report()
+            output_c['c3r_comm_summary'] = tracker3.c3r_accounting_report()
 
         return output_a, output_b, output_c
 

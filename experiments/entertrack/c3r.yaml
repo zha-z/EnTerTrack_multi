@@ -1,0 +1,7 @@
+BASE_CONFIG: baseline.yaml
+MODEL:
+  COLLABORATION:
+    TYPE: c3r
+    SAFE_COMMIT: true
+  FCVC:
+    ENABLED: false

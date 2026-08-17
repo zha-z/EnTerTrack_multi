@@ -1,7 +1,11 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import cv2
+try:
+    import cv2
+except ModuleNotFoundError:
+    cv2 = None
+from PIL import Image, ImageDraw
 
 
 def draw_figure(fig):
@@ -69,13 +73,31 @@ def show_image_with_boxes(im, boxes, iou_pred=None, disp_ids=None):
         if disp_ids is None or disp_ids[i_]:
             bb = boxes[i_, :]
             disp_color = (i_*38 % 256, (255 - i_*97) % 256, (123 + i_*66) % 256)
-            cv2.rectangle(im_np, (bb[0], bb[1]), (bb[0] + bb[2], bb[1] + bb[3]),
-                          disp_color, 1)
+            if cv2 is not None:
+                cv2.rectangle(im_np, (bb[0], bb[1]), (bb[0] + bb[2], bb[1] + bb[3]),
+                              disp_color, 1)
+            else:
+                pil_image = Image.fromarray(im_np)
+                ImageDraw.Draw(pil_image).rectangle(
+                    (bb[0], bb[1], bb[0] + bb[2], bb[1] + bb[3]),
+                    outline=tuple(int(c) for c in disp_color),
+                    width=1,
+                )
+                im_np = np.asarray(pil_image)
 
             if iou_pred is not None:
                 text_pos = (bb[0], bb[1] - 5)
-                cv2.putText(im_np, 'ID={} IOU = {:3.2f}'.format(i_, iou_pred[i_]), text_pos,
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, bottomLeftOrigin=False)
+                if cv2 is not None:
+                    cv2.putText(im_np, 'ID={} IOU = {:3.2f}'.format(i_, iou_pred[i_]), text_pos,
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, bottomLeftOrigin=False)
+                else:
+                    pil_image = Image.fromarray(im_np)
+                    ImageDraw.Draw(pil_image).text(
+                        text_pos,
+                        'ID={} IOU = {:3.2f}'.format(i_, iou_pred[i_]),
+                        fill=(0, 255, 0),
+                    )
+                    im_np = np.asarray(pil_image)
 
     im_tensor = torch.from_numpy(im_np.transpose(2, 0, 1)).float()
 
@@ -146,7 +168,8 @@ def overlay_mask(im, ann, alpha=0.5, colors=None, contour_thickness=None):
     img[ann > 0] = fg[ann > 0]
 
     if contour_thickness:  # pragma: no cover
-        import cv2
+        if cv2 is None:
+            return img
         for obj_id in np.unique(ann[ann > 0]):
             contours = cv2.findContours((ann == obj_id).astype(
                 np.uint8), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)[-2:]

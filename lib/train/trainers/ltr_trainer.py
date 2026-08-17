@@ -342,3 +342,8 @@ class LTRTrainer(BaseTrainer):
             self.tensorboard_writer.write_info(self.settings.script_name, self.settings.description)
 
         self.tensorboard_writer.write_epoch(self.stats, self.epoch)
+
+
+# The FCVC specialization shares the canonical trainer module namespace while
+# retaining a separate file to keep the legacy LTRTrainer readable.
+from .fcvc_ltr_trainer import FCVCLTRTrainer  # noqa: E402,F401

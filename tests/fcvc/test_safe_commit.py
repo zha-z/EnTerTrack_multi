@@ -1,0 +1,10 @@
+import unittest
+
+import common
+
+
+class FCVCSafeCommitContractTest(unittest.TestCase):
+    test_reported_output_never_becomes_state = common.legacy_model.FCVCContractTest.test_safe_commit_multiframe_reported_output_not_state
+    test_split_predict_commit_report_api = common.legacy_runtime.FCVCRuntimeIntegrationTest.test_split_api_contract_and_report_state_immutability
+    test_local_payload_has_no_mutable_alias = common.legacy_runtime.FCVCRuntimeIntegrationTest.test_local_payload_alias_audit
+    test_invalid_collaboration_falls_back_local = common.legacy_runtime.FCVCRuntimeIntegrationTest.test_invalid_collaborative_output_falls_back_to_local

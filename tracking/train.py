@@ -1,6 +1,40 @@
 import os
 import argparse
 import random
+import sys
+
+from pathlib import Path
+import os
+import random
+import warnings
+
+import numpy as np
+import torch
+
+
+warnings.filterwarnings(
+    "ignore",
+    message=r".*grid_sampler_2d_backward_cuda does not have a deterministic implementation.*",
+    category=UserWarning,
+)
+
+
+def setup_reproducibility(seed: int = 42) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+
+    # 对没有确定性实现的算子警告后继续，而不是终止训练
+    torch.use_deterministic_algorithms(True, warn_only=True)
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 def parse_args():
@@ -23,6 +57,11 @@ def parse_args():
     parser.add_argument('--distill', type=int, choices=[0, 1], default=0)  # whether to use knowledge distillation
     parser.add_argument('--script_teacher', type=str, help='teacher script name')
     parser.add_argument('--config_teacher', type=str, help='teacher yaml configure file name')
+    parser.add_argument('--resume', type=str, default=None)
+    parser.add_argument('--device', type=str, default='')
+    parser.add_argument('--audit', action='store_true')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='validate the resolved config and training plan without training')
 
     # for multiple machines
     parser.add_argument('--rank', type=int, help='Rank of the current process.')
@@ -37,6 +76,34 @@ def parse_args():
 
 def main():
     args = parse_args()
+    if args.script == "entertrack" and args.config == "fcvc_full":
+        import torch.distributed as dist
+
+        from lib.train.admin.settings import Settings
+        from lib.train.train_script import run
+
+        local_rank = int(os.environ.get("LOCAL_RANK", "-1"))
+        if local_rank >= 0 and not dist.is_initialized():
+            dist.init_process_group(backend="nccl")
+            torch.cuda.set_device(local_rank)
+        root = Path(__file__).resolve().parents[1]
+        settings = Settings()
+        settings.script_name = args.script
+        settings.config_name = args.config
+        settings.cfg_file = str(root / "experiments" / args.script / (args.config + ".yaml"))
+        settings.save_dir = args.save_dir
+        settings.mode = args.mode
+        settings.resume = args.resume
+        settings.device_name = args.device
+        settings.audit = bool(args.audit)
+        settings.dry_run = bool(args.dry_run)
+        settings.local_rank = local_rank
+        try:
+            run(settings)
+        finally:
+            if dist.is_initialized():
+                dist.destroy_process_group()
+        return
     if args.mode == "single":
         train_cmd = "python lib/train/run_training.py --script %s --config %s --save_dir %s --use_lmdb %d " \
                     "--script_prv %s --config_prv %s --distill %d --script_teacher %s --config_teacher %s --use_wandb %d"\

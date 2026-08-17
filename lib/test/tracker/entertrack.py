@@ -1,20 +1,473 @@
+import math
 import os
+import copy
+import hashlib
+import json
 import torch
-import cv2
+try:
+    import cv2
+except ModuleNotFoundError:
+    cv2 = None
+from PIL import Image, ImageDraw
 
 from lib.models.entertrack import build_entertrack
 from lib.test.tracker.basetracker import BaseTracker
 from lib.test.tracker.vis_utils import gen_visualization
 from lib.test.tracker.data_utils import Preprocessor
+from lib.test.tracker.motion_state import MotionStateManager
+from lib.test.tracker.mcr_redetection import (
+    MCRRedetectionManager,
+    RedetectionCandidate,
+    bbox_center,
+)
 from lib.test.utils.pcum_diagnostics import (
     PCUMDiagnosticHooks,
     normalized_response_entropy,
     prompt_norm,
 )
 from lib.test.utils.hann import hann2d
+from lib.test.utils.c3r_inference import (
+    C3RReceiverContext,
+    build_packet_record,
+    collaborate_local_candidate,
+    diagnostic_row as c3r_diagnostic_row,
+)
+from lib.models.entertrack.c3r import MessageAccounting
+from lib.models.entertrack.temporal_gate import (
+    TemporalGateRuntime,
+    load_temporal_gate_checkpoint,
+)
+from lib.models.entertrack.fcvc.structures import FrameTrackingResult
+from lib.models.entertrack.fcvc import (
+    FCVCConfig,
+    FCVCModel,
+    build_sender_bundle,
+    load_fcvc_checkpoint,
+)
+from lib.models.entertrack.fcvc.feature_taps import capture_taps, split_template_search
 from lib.train.data.processing_utils import sample_target
 from lib.utils.box_ops import clip_box
 from lib.utils.ce_utils import generate_mask_cond
+
+
+RELIABILITY_SELECTOR_MODES = ("none", "deterministic")
+
+
+FCVC_PERSISTENT_STATE_REGISTRY = (
+    {
+        "owner": "EnTeRTrack",
+        "function": "__init__/initialize/_commit_state_from_candidate",
+        "name": "state",
+        "dtype_shape": "list[4] xywh",
+        "init": "None then init_bbox",
+        "read": "_run_candidate map_box_back get_redetection_context",
+        "write": "initialize _commit_state_from_candidate",
+        "source": "local in FCVC",
+        "next_crop": True,
+        "template_memory": False,
+        "packet_sender": True,
+        "digest": True,
+        "behavior": "E0/C1 unchanged; FCVC commits local state_output only",
+    },
+    {
+        "owner": "EnTeRTrack",
+        "function": "_track_single/c3r_track_with_packets/pcum_track_with_remote",
+        "name": "frame_id",
+        "dtype_shape": "int scalar",
+        "init": "0",
+        "read": "diagnostics packet context motion/MCR",
+        "write": "per-frame increment",
+        "source": "local runtime clock",
+        "next_crop": False,
+        "template_memory": False,
+        "packet_sender": True,
+        "digest": True,
+        "behavior": "FCVC increments before predict like E0 runtime",
+    },
+    {
+        "owner": "EnTeRTrack",
+        "function": "initialize",
+        "name": "z_dict1",
+        "dtype_shape": "NestedTensor template",
+        "init": "preprocessed template crop",
+        "read": "_network_forward",
+        "write": "initialize",
+        "source": "local initialization",
+        "next_crop": False,
+        "template_memory": True,
+        "packet_sender": False,
+        "digest": True,
+        "behavior": "unchanged; FCVC never rewrites from collaborative branch",
+    },
+    {
+        "owner": "EnTeRTrack",
+        "function": "initialize",
+        "name": "z_patch_arr",
+        "dtype_shape": "image array",
+        "init": "template crop array",
+        "read": "debug visualization",
+        "write": "initialize",
+        "source": "local initialization",
+        "next_crop": False,
+        "template_memory": True,
+        "packet_sender": False,
+        "digest": True,
+        "behavior": "unchanged",
+    },
+    {
+        "owner": "EnTeRTrack",
+        "function": "initialize",
+        "name": "box_mask_z",
+        "dtype_shape": "tensor/bool mask or None",
+        "init": "CE mask or None",
+        "read": "_network_forward",
+        "write": "initialize",
+        "source": "local initialization",
+        "next_crop": False,
+        "template_memory": True,
+        "packet_sender": False,
+        "digest": True,
+        "behavior": "unchanged",
+    },
+    {
+        "owner": "EnTeRTrack",
+        "function": "__init__/close_pcum_diagnostics",
+        "name": "_pcum_diagnostic_hooks",
+        "dtype_shape": "object diagnostic buffers",
+        "init": "PCUMDiagnosticHooks",
+        "read": "_run_candidate diagnostics",
+        "write": "reset/snapshot/remove",
+        "source": "local diagnostic path",
+        "next_crop": False,
+        "template_memory": False,
+        "packet_sender": False,
+        "digest": True,
+        "behavior": "FCVC local payload freezes diagnostics before collaboration",
+    },
+    {
+        "owner": "EnTeRTrack",
+        "function": "pcum_track_with_remote",
+        "name": "last_pcum_diagnostic",
+        "dtype_shape": "dict or None",
+        "init": "None",
+        "read": "diagnostic output",
+        "write": "pcum diagnostics only",
+        "source": "selected PCUM candidate outside FCVC",
+        "next_crop": False,
+        "template_memory": False,
+        "packet_sender": False,
+        "digest": True,
+        "behavior": "FCVC does not use this as state input",
+    },
+    {
+        "owner": "EnTeRTrack",
+        "function": "__init__/c3r_track_with_packets",
+        "name": "c3r_last_frame_by_sender",
+        "dtype_shape": "dict[int,int]",
+        "init": "{}",
+        "read": "C3R context and Temporal Gate",
+        "write": "C3R packet runtime",
+        "source": "packet source local state",
+        "next_crop": False,
+        "template_memory": False,
+        "packet_sender": True,
+        "digest": True,
+        "behavior": "C1 unchanged; FCVC sender state must be local provenance",
+    },
+    {
+        "owner": "EnTeRTrack",
+        "function": "__init__/c3r_track_with_packets",
+        "name": "c3r_message_accounting",
+        "dtype_shape": "MessageAccounting object",
+        "init": "MessageAccounting()",
+        "read": "accounting report",
+        "write": "record_frame",
+        "source": "packet accounting",
+        "next_crop": False,
+        "template_memory": False,
+        "packet_sender": True,
+        "digest": True,
+        "behavior": "not updated by FCVC reported output",
+    },
+    {
+        "owner": "EnTeRTrack",
+        "function": "__init__/reset_temporal_gate",
+        "name": "temporal_gate_runtime",
+        "dtype_shape": "TemporalGateRuntime or None",
+        "init": "None or checkpoint sidecar",
+        "read": "C3R gate_provider",
+        "write": "gate_for/reset",
+        "source": "C1 sidecar only",
+        "next_crop": False,
+        "template_memory": False,
+        "packet_sender": True,
+        "digest": True,
+        "behavior": "FCVC runtime path excludes Temporal Gate",
+    },
+    {
+        "owner": "EnTeRTrack",
+        "function": "__init__/initialize/_apply_mcr",
+        "name": "mcr_manager",
+        "dtype_shape": "MCRRedetectionManager or None",
+        "init": "config object",
+        "read": "redetection context/process",
+        "write": "reset/process internal histories",
+        "source": "local in FCVC",
+        "next_crop": True,
+        "template_memory": False,
+        "packet_sender": False,
+        "digest": True,
+        "behavior": "FCVC commit uses local candidate/payload only",
+    },
+    {
+        "owner": "EnTeRTrack",
+        "function": "__init__/apply_confirmed_redetection",
+        "name": "mcr_updates_allowed",
+        "dtype_shape": "bool",
+        "init": "True",
+        "read": "get_redetection_context",
+        "write": "initialize/apply_confirmed_redetection",
+        "source": "local MCR result in FCVC",
+        "next_crop": True,
+        "template_memory": False,
+        "packet_sender": False,
+        "digest": True,
+        "behavior": "reported_output cannot change it",
+    },
+    {
+        "owner": "EnTeRTrack",
+        "function": "__init__/initialize/_attach_motion_shadow_diagnostics",
+        "name": "motion_state_manager",
+        "dtype_shape": "MotionStateManager or None",
+        "init": "config object",
+        "read": "diagnostic output",
+        "write": "reset/update_prediction_only histories",
+        "source": "local in FCVC",
+        "next_crop": False,
+        "template_memory": False,
+        "packet_sender": False,
+        "digest": True,
+        "behavior": "FCVC updates motion/confidence from local state_output",
+    },
+    {
+        "owner": "EnTeRTrack",
+        "function": "__init__",
+        "name": "output_window",
+        "dtype_shape": "tensor [feat_sz,feat_sz]",
+        "init": "hann2d",
+        "read": "_decode_prediction",
+        "write": "constructor only",
+        "source": "configuration",
+        "next_crop": False,
+        "template_memory": False,
+        "packet_sender": False,
+        "digest": True,
+        "behavior": "unchanged constant",
+    },
+    {
+        "owner": "EnTeRTrack",
+        "function": "_run_candidate",
+        "name": "candidate.crop_bbox",
+        "dtype_shape": "list[4] xywh",
+        "init": "pre-frame state/reference bbox",
+        "read": "map_box_back C3R/FCVC sender payload",
+        "write": "candidate creation",
+        "source": "local payload in FCVC",
+        "next_crop": True,
+        "template_memory": False,
+        "packet_sender": True,
+        "digest": True,
+        "behavior": "frozen before collaborative branch",
+    },
+    {
+        "owner": "EnTeRTrack",
+        "function": "_run_candidate",
+        "name": "candidate.resize_factor",
+        "dtype_shape": "float",
+        "init": "sample_target result",
+        "read": "box mapping and sender payload",
+        "write": "candidate creation",
+        "source": "local payload in FCVC",
+        "next_crop": True,
+        "template_memory": False,
+        "packet_sender": True,
+        "digest": True,
+        "behavior": "frozen before collaborative branch",
+    },
+    {
+        "owner": "EnTeRTrack",
+        "function": "_run_candidate",
+        "name": "candidate.search_factor",
+        "dtype_shape": "float",
+        "init": "params/search override",
+        "read": "diagnostics next crop audit",
+        "write": "candidate creation",
+        "source": "local payload in FCVC",
+        "next_crop": True,
+        "template_memory": False,
+        "packet_sender": False,
+        "digest": True,
+        "behavior": "frozen before collaborative branch",
+    },
+    {
+        "owner": "EnTeRTrack",
+        "function": "_run_candidate",
+        "name": "candidate.max_score",
+        "dtype_shape": "tensor/scalar",
+        "init": "local response decode",
+        "read": "confidence/history/diagnostics",
+        "write": "candidate creation",
+        "source": "local payload in FCVC",
+        "next_crop": False,
+        "template_memory": False,
+        "packet_sender": True,
+        "digest": True,
+        "behavior": "reported score is display-only",
+    },
+    {
+        "owner": "EnTeRTrack",
+        "function": "_run_candidate",
+        "name": "candidate.apce",
+        "dtype_shape": "tensor/scalar",
+        "init": "calAPCE(local response)",
+        "read": "motion/confidence diagnostics",
+        "write": "candidate creation",
+        "source": "local payload in FCVC",
+        "next_crop": False,
+        "template_memory": False,
+        "packet_sender": True,
+        "digest": True,
+        "behavior": "FCVC motion/confidence histories consume local apce",
+    },
+    {
+        "owner": "EnTeRTrack",
+        "function": "_run_candidate",
+        "name": "candidate.response",
+        "dtype_shape": "tensor [B,H,W] or [B,1,H,W]",
+        "init": "windowed local score map",
+        "read": "APCE entropy quality packet",
+        "write": "candidate creation",
+        "source": "local payload in FCVC",
+        "next_crop": False,
+        "template_memory": False,
+        "packet_sender": True,
+        "digest": True,
+        "behavior": "frozen before collaborative branch",
+    },
+    {
+        "owner": "EnTeRTrack",
+        "function": "_run_candidate",
+        "name": "candidate.out_dict",
+        "dtype_shape": "dict of network tensors",
+        "init": "network forward output",
+        "read": "debug C3R packet diagnostics",
+        "write": "candidate creation",
+        "source": "local payload in FCVC for sender bundle",
+        "next_crop": False,
+        "template_memory": False,
+        "packet_sender": True,
+        "digest": True,
+        "behavior": "collaborative out_dict not used for commit",
+    },
+    {
+        "owner": "EnTeRTrack",
+        "function": "_run_candidate",
+        "name": "candidate.local_prompt",
+        "dtype_shape": "tensor or None",
+        "init": "local forward",
+        "read": "PCUM prompt exchange",
+        "write": "candidate creation",
+        "source": "local payload in FCVC",
+        "next_crop": False,
+        "template_memory": False,
+        "packet_sender": True,
+        "digest": True,
+        "behavior": "sender bundle/prompt source remains local",
+    },
+    {
+        "owner": "EnTeRTrack",
+        "function": "_run_candidate",
+        "name": "candidate.remote_states",
+        "dtype_shape": "dict/list or None",
+        "init": "runtime input",
+        "read": "diagnostics only",
+        "write": "candidate creation",
+        "source": "remote input, not commit state",
+        "next_crop": False,
+        "template_memory": False,
+        "packet_sender": False,
+        "digest": True,
+        "behavior": "FCVC excludes from local commit payload unless local source",
+    },
+    {
+        "owner": "evaluation runner",
+        "function": "lib/test/evaluation/tracker.py three-view loops",
+        "name": "per-view tracker objects",
+        "dtype_shape": "tracker instances",
+        "init": "one per view",
+        "read": "receiver/sender orchestration",
+        "write": "each tracker commits own state",
+        "source": "local state_output",
+        "next_crop": True,
+        "template_memory": True,
+        "packet_sender": True,
+        "digest": True,
+        "behavior": "FCVC mock runner keeps A/B/C and target streams isolated",
+    },
+    {
+        "owner": "evaluation runner",
+        "function": "message exchange",
+        "name": "sender packet/bundle queue",
+        "dtype_shape": "dict/list payloads",
+        "init": "per frame local candidates",
+        "read": "receiver collaboration",
+        "write": "after local branch",
+        "source": "local payload only",
+        "next_crop": False,
+        "template_memory": False,
+        "packet_sender": True,
+        "digest": True,
+        "behavior": "reported_output is not enqueued",
+    },
+)
+
+
+def validate_reliability_selector(mode):
+    mode = str(mode).lower()
+    if mode not in RELIABILITY_SELECTOR_MODES:
+        raise ValueError(
+            "Unsupported PCUM reliability selector: {}".format(mode)
+        )
+    return mode
+
+
+def deterministic_reliability_selector_decision(
+    local_confidence,
+    collaborative_confidence,
+    collaborative_motion_reliability,
+    margin=0.0,
+    motion_threshold=0.0,
+):
+    """Prediction-only deterministic choice between local and collaborative."""
+    local_confidence = float(local_confidence)
+    collaborative_confidence = float(collaborative_confidence)
+    collaborative_motion_reliability = float(collaborative_motion_reliability)
+    margin = float(margin)
+    motion_threshold = float(motion_threshold)
+    confidence_delta = collaborative_confidence - local_confidence
+    use_collaborative = (
+        confidence_delta >= margin
+        and collaborative_motion_reliability >= motion_threshold
+    )
+    return {
+        "use_collaborative": bool(use_collaborative),
+        "local_confidence": local_confidence,
+        "collaborative_confidence": collaborative_confidence,
+        "confidence_delta": confidence_delta,
+        "collaborative_motion_reliability": collaborative_motion_reliability,
+        "margin": margin,
+        "motion_threshold": motion_threshold,
+    }
 
 
 class EnTeRTrack(BaseTracker):
@@ -34,12 +487,97 @@ class EnTeRTrack(BaseTracker):
         super(EnTeRTrack, self).__init__(params)
 
         self.cfg = params.cfg
+        mcr_cfg = getattr(self.cfg.TEST, "MCR", None)
+        self.mcr_config_name = str(getattr(params, "param_name", "unknown"))
+        mcr_enabled = bool(getattr(mcr_cfg, "ENABLED", False))
+        mcr_shadow_only = bool(getattr(mcr_cfg, "SHADOW_ONLY", True))
+        mcr_global_enabled = bool(getattr(mcr_cfg, "GLOBAL_ENABLED", False))
+        if not mcr_enabled:
+            mcr_mode = "DISABLED"
+        elif mcr_shadow_only:
+            mcr_mode = "SHADOW"
+        else:
+            mcr_mode = "ACTIVE"
+        print(
+            "[MCR MODE]\n"
+            "config={}\n"
+            "enabled={}\n"
+            "shadow_only={}\n"
+            "global_enabled={}\n"
+            "mode={}".format(
+                self.mcr_config_name,
+                str(mcr_enabled).lower(),
+                str(mcr_shadow_only).lower(),
+                str(mcr_global_enabled).lower(),
+                mcr_mode,
+            )
+        )
 
         network = build_entertrack(params.cfg, training=False)
         self._load_network(network, self.params.checkpoint)
 
         self.network = network.cuda()
         self.network.eval()
+        self.fcvc_enabled = bool(
+            str(getattr(getattr(self.cfg.MODEL, "COLLABORATION", None), "TYPE", "")).lower() == "fcvc"
+            and bool(getattr(getattr(self.cfg.MODEL, "FCVC", None), "ENABLED", False))
+        )
+        self.fcvc_model = None
+        if self.fcvc_enabled:
+            self.fcvc_model = self._load_fcvc_sidecar(params).cuda().eval()
+        self.c3r_enabled = bool(
+            getattr(getattr(self.cfg.MODEL, "C3R", None), "ENABLED", False)
+            and getattr(getattr(self.cfg.TEST, "C3R", None), "ENABLED", False)
+        )
+        if self.c3r_enabled and self.network.c3r is None:
+            raise RuntimeError("formal C3R inference requires network.c3r")
+        self.c3r_last_frame_by_sender = {}
+        self.c3r_message_accounting = MessageAccounting()
+        temporal_model_enabled = bool(getattr(
+            getattr(self.cfg.MODEL, "TEMPORAL_GATE", None), "ENABLED", False))
+        temporal_test_enabled = bool(getattr(
+            getattr(self.cfg.TEST, "TEMPORAL_GATE", None), "ENABLED", False))
+        if temporal_model_enabled != temporal_test_enabled:
+            raise RuntimeError("Temporal Gate MODEL/TEST enable flags must match")
+        self.temporal_gate_enabled = bool(
+            self.c3r_enabled and temporal_model_enabled and temporal_test_enabled)
+        if temporal_model_enabled and not self.c3r_enabled:
+            raise RuntimeError("Temporal Gate requires the frozen C1 packet path")
+        self.temporal_gate_runtime = None
+        if self.temporal_gate_enabled:
+            checkpoint = str(getattr(params, "temporal_gate_checkpoint", "") or "")
+            if not checkpoint or not os.path.isfile(checkpoint):
+                raise FileNotFoundError(
+                    "enabled Temporal Gate requires a separate sidecar checkpoint")
+            sidecar = load_temporal_gate_checkpoint(
+                checkpoint,
+                expected_sha256=str(getattr(
+                    params, "temporal_gate_checkpoint_sha256", "") or ""),
+                map_location="cpu",
+            ).cuda().eval()
+            self.temporal_gate_runtime = TemporalGateRuntime(sidecar)
+        self.no_gt_inference = bool(getattr(params, "no_gt_inference", False))
+        self.c3r_instrumentation_enabled = bool(getattr(
+            params, "c3r_instrumentation", False))
+        self.c3r_instrumentation_fold_id = int(getattr(
+            params, "instrumentation_fold_id", -1))
+        self.temporal_gate_rollout_capture = bool(getattr(
+            params, "temporal_gate_rollout_capture", False))
+        self.temporal_gate_counterfactual_diagnostics = bool(getattr(
+            params, "temporal_gate_counterfactual_diagnostics", False))
+        self.remote_information_diagnostics = bool(getattr(
+            params, "remote_information_diagnostics", False))
+        if (self.temporal_gate_counterfactual_diagnostics
+                and not self.temporal_gate_rollout_capture):
+            raise RuntimeError(
+                "counterfactual diagnostics require rollout capture")
+        if (self.remote_information_diagnostics
+                and not self.temporal_gate_counterfactual_diagnostics):
+            raise RuntimeError(
+                "remote-information diagnostics require counterfactual diagnostics")
+        self._temporal_gate_backbone_forward_count = 0
+        if self.c3r_instrumentation_enabled and not self.c3r_enabled:
+            raise RuntimeError("C3R instrumentation requires formal C3R inference")
 
         diagnostics_cfg = getattr(
             getattr(self.cfg.TEST, "PCUM", None),
@@ -54,6 +592,28 @@ class EnTeRTrack(BaseTracker):
             enabled=self.pcum_diagnostics_enabled,
         )
         self.last_pcum_diagnostic = None
+        self.remote_weight_diagnostics_enabled = bool(getattr(
+            getattr(self.cfg.MODEL, "PCUM", None),
+            "REMOTE_WEIGHT_DIAGNOSTICS",
+            True,
+        ))
+        motion_cfg = getattr(self.cfg.TEST, "MOTION_STATE", None)
+        self.motion_state_enabled = bool(getattr(motion_cfg, "ENABLED", False))
+        self.motion_state_log_enabled = bool(
+            self.motion_state_enabled
+            and getattr(motion_cfg, "LOG_ENABLED", False)
+        )
+        if self.motion_state_enabled and not bool(
+            getattr(motion_cfg, "SHADOW_ONLY", True)
+        ):
+            raise ValueError("M0 motion state supports SHADOW_ONLY=true only")
+        self.motion_state_manager = (
+            MotionStateManager.from_config(motion_cfg)
+            if self.motion_state_enabled else None
+        )
+        self.mcr_manager = MCRRedetectionManager(mcr_cfg) if mcr_cfg is not None else None
+        self.mcr_enabled = bool(self.mcr_manager is not None and self.mcr_manager.enabled)
+        self.mcr_updates_allowed = True
 
         self.preprocessor = Preprocessor()
         self.state = None
@@ -103,6 +663,8 @@ class EnTeRTrack(BaseTracker):
             network.load_state_dict(state_dict, strict=True)
 
         except RuntimeError:
+            if getattr(network, "c3r", None) is not None:
+                raise
             new_state_dict = {}
 
             for k, v in state_dict.items():
@@ -119,6 +681,41 @@ class EnTeRTrack(BaseTracker):
             print("Load checkpoint with strict=False")
             print("Missing keys:", missing_keys)
             print("Unexpected keys:", unexpected_keys)
+
+    def _load_fcvc_sidecar(self, params):
+        checkpoint = str(getattr(params, "fcvc_checkpoint", "") or "")
+        if not checkpoint or not os.path.isfile(checkpoint):
+            raise FileNotFoundError(
+                "FCVC inference requires fcvc_student_epoch30 sidecar: {}".format(
+                    checkpoint))
+        raw_cfg = self.cfg.MODEL.FCVC
+        if hasattr(raw_cfg, "items"):
+            cfg_items = raw_cfg.items()
+        else:
+            cfg_items = (
+                (name, getattr(raw_cfg, name))
+                for name in dir(raw_cfg) if name.isupper()
+            )
+        model_cfg = {
+            str(key).lower(): value
+            for key, value in cfg_items
+            if str(key).lower() in FCVCConfig.__dataclass_fields__
+        }
+        fcvc = FCVCModel(FCVCConfig(**model_cfg))
+        result = load_fcvc_checkpoint(fcvc, checkpoint, strict=False)
+        missing = sorted(result.missing_keys)
+        unexpected = sorted(result.unexpected_keys)
+        non_teacher_missing = [
+            key for key in missing if not key.startswith("teacher.")
+        ]
+        if non_teacher_missing or unexpected:
+            raise RuntimeError(
+                "FCVC sidecar load failed: missing_non_teacher={}, unexpected={}".format(
+                    non_teacher_missing, unexpected))
+        fcvc.sidecar_checkpoint = checkpoint
+        print("Load FCVC sidecar from: {}".format(checkpoint))
+        print("FCVC sidecar missing teacher-only keys: {}".format(len(missing)))
+        return fcvc
 
     # ------------------------------------------------------------
     # Initialization
@@ -159,10 +756,21 @@ class EnTeRTrack(BaseTracker):
 
         self.state = info["init_bbox"]
         self.frame_id = 0
-
+        output = {}
+        if self.mcr_manager is not None:
+            self.mcr_manager.reset(initial_bbox=info["init_bbox"])
+        self.mcr_updates_allowed = True
+        if self.motion_state_manager is not None:
+            initial_record = self.motion_state_manager.reset(
+                initial_bbox=info["init_bbox"],
+                image_size=image.shape[:2],
+            )
+            if self.motion_state_log_enabled:
+                output["motion_state_diagnostics"] = initial_record
         if self.save_all_boxes:
             all_boxes_save = info["init_bbox"] * self.cfg.MODEL.NUM_OBJECT_QUERIES
-            return {"all_boxes": all_boxes_save}
+            output["all_boxes"] = all_boxes_save
+        return output or None
 
     def multi_initialize(self, image_a, image_b, init_info_a, init_info_b):
         """
@@ -201,6 +809,8 @@ class EnTeRTrack(BaseTracker):
         注意：
         推理阶段显式传 training=False。
         """
+        if self.temporal_gate_counterfactual_diagnostics:
+            self._temporal_gate_backbone_forward_count += 1
         out_dict = self.network.forward(
             template=self.z_dict1.tensors,
             search=search_tensor,
@@ -363,7 +973,8 @@ class EnTeRTrack(BaseTracker):
         prompt_gate_input=None,
         remote_prompts=None,
         remote_states=None,
-        return_score=True
+        return_score=True,
+        reference_bbox=None,
     ):
         """
         Run one forward pass from the current state without committing it.
@@ -377,9 +988,10 @@ class EnTeRTrack(BaseTracker):
         if search_factor is None:
             search_factor = self.params.search_factor
 
+        crop_bbox = self.state if reference_bbox is None else reference_bbox
         x_patch_arr, resize_factor, x_amask_arr = sample_target(
             image,
-            self.state,
+            crop_bbox,
             search_factor,
             output_sz=self.params.search_size
         )
@@ -405,7 +1017,7 @@ class EnTeRTrack(BaseTracker):
         )
 
         target_bbox = clip_box(
-            self.map_box_back(pred_box, resize_factor),
+            self.map_box_back(pred_box, resize_factor, reference_bbox=crop_bbox),
             H,
             W,
             margin=10
@@ -414,7 +1026,8 @@ class EnTeRTrack(BaseTracker):
         if self.save_all_boxes:
             all_boxes = self.map_box_back_batch(
                 pred_boxes * self.params.search_size / resize_factor,
-                resize_factor
+                resize_factor,
+                reference_bbox=crop_bbox,
             )
             output = {
                 "target_bbox": target_bbox,
@@ -426,6 +1039,10 @@ class EnTeRTrack(BaseTracker):
         candidate = {
             "output": output,
             "target_bbox": target_bbox,
+            "prev_bbox": list(self.state) if self.state is not None else None,
+            "crop_bbox": list(crop_bbox),
+            "resize_factor": float(resize_factor),
+            "search_factor": float(search_factor),
             "max_score": max_score,
             "apce": self.calAPCE(response),
             "response": response,
@@ -438,7 +1055,23 @@ class EnTeRTrack(BaseTracker):
             "align_gate": out_dict.get("pcum", {}).get("align_gate", None)
                 if isinstance(out_dict.get("pcum", None), dict) else None,
             "used_remote": remote_prompts is not None,
+            "remote_states": remote_states,
         }
+        pcum_output = out_dict.get("pcum", None)
+        if isinstance(pcum_output, dict):
+            candidate["remote_weights"] = pcum_output.get("remote_weights", None)
+            candidate["remote_quality"] = pcum_output.get("remote_quality", None)
+            candidate["remote_aggregation_diagnostics"] = pcum_output.get(
+                "remote_aggregation_diagnostics", None
+            )
+            candidate["remote_suppression"] = pcum_output.get(
+                "remote_suppression", None)
+            candidate["remote_delta_norm"] = pcum_output.get(
+                "remote_delta_norm", None)
+            candidate["suppressed_delta_norm"] = pcum_output.get(
+                "suppressed_delta_norm", None)
+            candidate["remote_suppression_active_ratio"] = pcum_output.get(
+                "remote_suppression_active_ratio", None)
         if self.pcum_diagnostics_enabled:
             candidate["diagnostics"] = {
                 **self._pcum_diagnostic_hooks.snapshot(),
@@ -448,7 +1081,264 @@ class EnTeRTrack(BaseTracker):
             }
         return candidate
 
+    def fcvc_local_candidate(self, image, search_factor=None):
+        if not self.fcvc_enabled or self.fcvc_model is None:
+            raise RuntimeError("fcvc_local_candidate requires loaded FCVC sidecar")
+        H, W, _ = image.shape
+        if search_factor is None:
+            search_factor = self.params.search_factor
+        crop_bbox = self.state
+        x_patch_arr, resize_factor, x_amask_arr = sample_target(
+            image, crop_bbox, search_factor, output_sz=self.params.search_size)
+        search = self.preprocessor.process(x_patch_arr, x_amask_arr)
+        with torch.no_grad():
+            taps = capture_taps(
+                self.network.backbone, self.z_dict1.tensors, search.tensors)
+            template_mid, mid_search = split_template_search(taps.mid_tokens)
+            template_high, high_search = split_template_search(taps.final_tokens)
+            out_dict = self.network.forward_head(taps.final_tokens)
+        pred_box, pred_boxes, max_score, response = self._decode_prediction(
+            out_dict, resize_factor, return_score=True)
+        target_bbox = clip_box(
+            self.map_box_back(pred_box, resize_factor, reference_bbox=crop_bbox),
+            H, W, margin=10)
+        output = {"target_bbox": target_bbox}
+        local_record = {
+            "template_mid": template_mid.detach(),
+            "template_high": template_high.detach(),
+            "mid_search": mid_search.detach(),
+            "high_search": high_search.detach(),
+            "response_map": out_dict["score_map"].detach(),
+            "confidence_uncertainty": torch.cat(
+                (
+                    out_dict["score_map"].detach(),
+                    torch.full_like(out_dict["score_map"].detach(), 0.5),
+                ),
+                dim=1,
+            ),
+            "target_prototype": high_search.detach().mean(dim=1),
+            "local_output": out_dict,
+        }
+        return {
+            "output": output,
+            "target_bbox": target_bbox,
+            "prev_bbox": list(self.state) if self.state is not None else None,
+            "crop_bbox": list(crop_bbox),
+            "resize_factor": float(resize_factor),
+            "search_factor": float(search_factor),
+            "max_score": max_score,
+            "apce": self.calAPCE(response),
+            "response": response,
+            "out_dict": out_dict,
+            "pred_boxes": pred_boxes,
+            "x_patch_arr": x_patch_arr,
+            "image": image,
+            "local_record": local_record,
+            "_fcvc_provenance": "local",
+        }
+
+    def fcvc_sender_bundle(self, local_candidate, view_id, frame_id):
+        local = local_candidate["local_record"]
+        return build_sender_bundle(
+            local["mid_search"],
+            local["high_search"],
+            local["response_map"],
+            local_bbox=torch.tensor(
+                [local_candidate["target_bbox"]],
+                device=local["high_search"].device,
+                dtype=torch.float32,
+            ),
+            view_id=torch.full(
+                (1,), int(view_id), device=local["high_search"].device,
+                dtype=torch.int16),
+            timestamp=torch.full(
+                (1,), int(frame_id), device=local["high_search"].device,
+                dtype=torch.int64),
+        )
+
+    def fcvc_collaborative_candidate(self, local_candidate, sender_bundles):
+        if not self.fcvc_enabled or self.fcvc_model is None:
+            raise RuntimeError("fcvc_collaborative_candidate requires loaded FCVC sidecar")
+        image = local_candidate["image"]
+        H, W = image.shape[:2]
+        with torch.no_grad():
+            fcvc_out = self.fcvc_model(
+                local_candidate["local_record"],
+                tuple(sender_bundles),
+                forward_head=self.network.forward_head,
+            )
+        pred_box, pred_boxes, max_score, response = self._decode_prediction(
+            fcvc_out["reported_output"],
+            local_candidate["resize_factor"],
+            return_score=True,
+        )
+        target_bbox = clip_box(
+            self.map_box_back(
+                pred_box,
+                local_candidate["resize_factor"],
+                reference_bbox=local_candidate["crop_bbox"],
+            ),
+            H,
+            W,
+            margin=10,
+        )
+        candidate = dict(local_candidate)
+        candidate.update({
+            "output": {"target_bbox": target_bbox},
+            "target_bbox": target_bbox,
+            "max_score": max_score,
+            "apce": self.calAPCE(response),
+            "response": response,
+            "out_dict": fcvc_out["reported_output"],
+            "pred_boxes": pred_boxes,
+            "used_remote": bool(fcvc_out.get("used_remote", False)),
+            "fcvc_diagnostics": {
+                "used_remote": bool(fcvc_out.get("used_remote", False)),
+                "reason": fcvc_out.get("reason", "ok"),
+            },
+            "_fcvc_provenance": "collaborative",
+        })
+        return candidate
+
+    def fcvc_finalize_frame(self, local_candidate, collaborative_candidate,
+                            info=None, debug_name=""):
+        frame_result = FrameTrackingResult(
+            local_candidate=self._fcvc_mark_candidate(local_candidate, "local"),
+            collaborative_candidate=self._fcvc_mark_candidate(
+                collaborative_candidate, "collaborative"),
+            state_output=self._fcvc_mark_candidate(local_candidate, "local"),
+            reported_output=self._fcvc_mark_candidate(
+                collaborative_candidate, "collaborative"),
+            local_runtime_payload=self.fcvc_freeze_local_runtime_payload(
+                local_candidate),
+            local_diagnostics={},
+            collaborative_diagnostics={
+                "report_fallback": False,
+                "fallback_reason": "ok",
+            },
+        )
+        output = self.fcvc_commit_frame_result(
+            frame_result, info=info, debug_name=debug_name)
+        return output, collaborative_candidate["max_score"], collaborative_candidate["apce"]
+
+    def get_redetection_context(self):
+        """Return prediction-only MCR context without exposing annotations."""
+        if self.mcr_manager is None:
+            return None
+        return {
+            "current_bbox": list(self.state) if self.state is not None else None,
+            "motion_center": self.mcr_manager.motion.predicted_center,
+            "last_reliable_center": self.mcr_manager.motion.last_reliable_center,
+            "updates_allowed": self.mcr_manager.switcher.updates_allowed,
+        }
+
+    def run_redetection_candidate(
+        self,
+        image,
+        center,
+        scale,
+        anchor_type,
+        reference_bbox,
+        remote_prompts=None,
+        remote_states=None,
+    ):
+        """Run a side-effect-free local enlarged search around ``center``."""
+        reference_bbox = list(reference_bbox)
+        search_bbox = list(reference_bbox)
+        search_bbox[0] = float(center[0]) - 0.5 * float(search_bbox[2])
+        search_bbox[1] = float(center[1]) - 0.5 * float(search_bbox[3])
+        cpu_rng_state = torch.get_rng_state()
+        cuda_rng_state = None
+        if torch.cuda.is_available():
+            cuda_rng_state = torch.cuda.get_rng_state(self.output_window.device)
+        saved_diagnostic = self.last_pcum_diagnostic
+        saved_alignment = copy.deepcopy(self._pcum_diagnostic_hooks.alignment)
+        saved_fusion = copy.deepcopy(self._pcum_diagnostic_hooks.fusion)
+        try:
+            raw = self._run_candidate(
+                image=image,
+                search_factor=float(self.params.search_factor) * float(scale),
+                remote_prompts=remote_prompts,
+                remote_states=remote_states,
+                return_score=True,
+                reference_bbox=search_bbox,
+            )
+        finally:
+            torch.set_rng_state(cpu_rng_state)
+            if cuda_rng_state is not None:
+                torch.cuda.set_rng_state(cuda_rng_state, self.output_window.device)
+            self.last_pcum_diagnostic = saved_diagnostic
+            self._pcum_diagnostic_hooks.alignment = saved_alignment
+            self._pcum_diagnostic_hooks.fusion = saved_fusion
+
+        remote_quality, _, _, _ = self._motion_remote_diagnostics(raw)
+        if remote_quality is None:
+            quality = raw.get("remote_quality", None)
+            if torch.is_tensor(quality) and quality.numel() > 0:
+                remote_quality = float(quality.detach().float().mean().cpu().item())
+        return RedetectionCandidate(
+            bbox=list(raw["target_bbox"]),
+            visual_score=max(0.0, min(1.0, self._score_value(raw["max_score"]))),
+            apce=self._score_value(raw["apce"]),
+            response_entropy=normalized_response_entropy(raw["response"]),
+            anchor_type=str(anchor_type),
+            scale=float(scale),
+            remote_score=remote_quality,
+            remote_diagnostics=raw.get("remote_aggregation_diagnostics", None),
+            feature=raw.get("local_prompt", None),
+            search_region={
+                "center": [float(center[0]), float(center[1])],
+                "crop_bbox": search_bbox,
+                "search_factor": float(self.params.search_factor) * float(scale),
+                "resize_factor": raw.get("resize_factor"),
+            },
+            source=raw,
+        )
+
+    def apply_confirmed_redetection(self, main_candidate, mcr_result):
+        """Return the candidate to commit after an optional active MCR switch."""
+        self.mcr_updates_allowed = bool(mcr_result.get("updates_allowed", True))
+        if not mcr_result.get("switched", False):
+            return main_candidate
+        selected = mcr_result.get("candidate", None)
+        if selected is None or selected.source is None:
+            return main_candidate
+        return selected.source
+
+    def _apply_mcr(self, image, candidate, remote_prompts=None, remote_states=None):
+        if not self.mcr_enabled:
+            return candidate, None
+        remote_quality, _, _, _ = self._motion_remote_diagnostics(candidate)
+        result = self.mcr_manager.process(
+            frame_id=self.frame_id,
+            current_bbox=candidate["target_bbox"],
+            current_visual_score=max(0.0, min(1.0, self._score_value(candidate["max_score"]))),
+            current_apce=self._score_value(candidate["apce"]),
+            image_size=image.shape[:2],
+            current_remote_score=remote_quality,
+            current_remote_diagnostics=candidate.get("remote_aggregation_diagnostics", None),
+            search_callback=lambda center, scale, anchor_type, reference_bbox: (
+                self.run_redetection_candidate(
+                    image=image,
+                    center=center,
+                    scale=scale,
+                    anchor_type=anchor_type,
+                    reference_bbox=reference_bbox,
+                    remote_prompts=remote_prompts,
+                    remote_states=remote_states,
+                )
+            ),
+        )
+        diagnostic = result["diagnostic"]
+        if diagnostic is not None:
+            diagnostic["tracker_parameter_name"] = self.mcr_config_name
+        return self.apply_confirmed_redetection(candidate, result), diagnostic
+
     def _commit_candidate(self, candidate, info=None, debug_name=""):
+        return self._commit_state_from_candidate(
+            candidate, info=info, debug_name=debug_name)["output"]
+
+    def _commit_state_from_candidate(self, candidate, info=None, debug_name=""):
         self.state = candidate["target_bbox"]
 
         if self.debug:
@@ -462,7 +1352,368 @@ class EnTeRTrack(BaseTracker):
                 debug_name=debug_name
             )
 
-        return candidate["output"]
+        return {
+            "output": candidate["output"],
+            "state_output": candidate,
+        }
+
+    @staticmethod
+    def _fcvc_clone_runtime_value(value):
+        if torch.is_tensor(value):
+            return value.detach().clone()
+        if isinstance(value, dict):
+            return {
+                copy.deepcopy(key): EnTeRTrack._fcvc_clone_runtime_value(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [EnTeRTrack._fcvc_clone_runtime_value(item) for item in value]
+        if isinstance(value, tuple):
+            return tuple(EnTeRTrack._fcvc_clone_runtime_value(item) for item in value)
+        try:
+            return copy.deepcopy(value)
+        except Exception:
+            return repr(value)
+
+    @staticmethod
+    def _fcvc_canonicalize_for_digest(value):
+        if torch.is_tensor(value):
+            tensor = value.detach().cpu().contiguous()
+            return {
+                "kind": "tensor",
+                "dtype": str(tensor.dtype),
+                "shape": list(tensor.shape),
+                "sha256": hashlib.sha256(tensor.numpy().tobytes()).hexdigest(),
+            }
+        if hasattr(value, "tensors") and torch.is_tensor(value.tensors):
+            return {
+                "kind": type(value).__name__,
+                "tensors": EnTeRTrack._fcvc_canonicalize_for_digest(value.tensors),
+            }
+        if hasattr(value, "__dict__") and not isinstance(value, type):
+            public = {
+                key: item for key, item in vars(value).items()
+                if not key.startswith("_")
+                and key not in ("logger", "visdom", "writer")
+            }
+            return EnTeRTrack._fcvc_canonicalize_for_digest(public)
+        if isinstance(value, dict):
+            return {
+                str(key): EnTeRTrack._fcvc_canonicalize_for_digest(value[key])
+                for key in sorted(value, key=lambda item: str(item))
+            }
+        if isinstance(value, (list, tuple)):
+            return [EnTeRTrack._fcvc_canonicalize_for_digest(item)
+                    for item in value]
+        if isinstance(value, (int, float, str, bool)) or value is None:
+            if isinstance(value, float) and not math.isfinite(value):
+                return {"kind": "nonfinite", "repr": repr(value)}
+            return value
+        return repr(value)
+
+    def fcvc_persistent_state_snapshot(self):
+        """Return the registered semantic runtime state for Safe Commit audit."""
+        snapshot = {
+            "state": self._fcvc_clone_runtime_value(getattr(self, "state", None)),
+            "frame_id": int(getattr(self, "frame_id", 0)),
+            "z_dict1": self._fcvc_clone_runtime_value(getattr(self, "z_dict1", None)),
+            "z_patch_arr": self._fcvc_clone_runtime_value(getattr(self, "z_patch_arr", None)),
+            "box_mask_z": self._fcvc_clone_runtime_value(getattr(self, "box_mask_z", None)),
+            "last_pcum_diagnostic": self._fcvc_clone_runtime_value(
+                getattr(self, "last_pcum_diagnostic", None)),
+            "c3r_last_frame_by_sender": self._fcvc_clone_runtime_value(
+                getattr(self, "c3r_last_frame_by_sender", {})),
+            "mcr_updates_allowed": bool(getattr(self, "mcr_updates_allowed", True)),
+            "output_window": self._fcvc_clone_runtime_value(
+                getattr(self, "output_window", None)),
+        }
+        for name in (
+                "c3r_message_accounting", "temporal_gate_runtime",
+                "mcr_manager", "motion_state_manager",
+                "_pcum_diagnostic_hooks"):
+            snapshot[name] = self._fcvc_clone_runtime_value(
+                getattr(self, name, None))
+        return snapshot
+
+    def fcvc_persistent_state_digest(self):
+        payload = self._fcvc_canonicalize_for_digest(
+            self.fcvc_persistent_state_snapshot())
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    def fcvc_next_crop_digest(self):
+        crop_source = {
+            "state": self._fcvc_clone_runtime_value(getattr(self, "state", None)),
+            "search_factor": float(getattr(self.params, "search_factor", 0.0))
+                if hasattr(self, "params") else 0.0,
+            "search_size": int(getattr(self.params, "search_size", 0))
+                if hasattr(self, "params") else 0,
+        }
+        encoded = json.dumps(
+            self._fcvc_canonicalize_for_digest(crop_source),
+            sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    def fcvc_sender_source_digest(self, local_runtime_payload):
+        fields = {
+            key: local_runtime_payload.get(key)
+            for key in (
+                "target_bbox", "max_score", "apce", "response",
+                "out_dict", "local_prompt", "crop_bbox", "resize_factor",
+                "frame_id", "provenance")
+        }
+        encoded = json.dumps(
+            self._fcvc_canonicalize_for_digest(fields),
+            sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    def fcvc_freeze_local_runtime_payload(self, local_candidate):
+        payload = {
+            "provenance": "local",
+            "frame_id": int(getattr(self, "frame_id", 0)),
+            "target_bbox": local_candidate.get("target_bbox"),
+            "output": local_candidate.get("output"),
+            "max_score": local_candidate.get("max_score"),
+            "apce": local_candidate.get("apce"),
+            "response": local_candidate.get("response"),
+            "out_dict": local_candidate.get("out_dict"),
+            "pred_boxes": local_candidate.get("pred_boxes"),
+            "prev_bbox": local_candidate.get("prev_bbox"),
+            "crop_bbox": local_candidate.get("crop_bbox"),
+            "resize_factor": local_candidate.get("resize_factor"),
+            "search_factor": local_candidate.get("search_factor"),
+            "x_patch_arr": local_candidate.get("x_patch_arr"),
+            "local_prompt": local_candidate.get("local_prompt"),
+            "aligned_prompt": local_candidate.get("aligned_prompt"),
+            "align_gate": local_candidate.get("align_gate"),
+            "remote_states": None,
+            "template_update_decision": local_candidate.get(
+                "template_update_decision", None),
+            "memory_update_decision": local_candidate.get(
+                "memory_update_decision", None),
+            "motion_update": {
+                "bbox": local_candidate.get("target_bbox"),
+                "max_score": local_candidate.get("max_score"),
+                "apce": local_candidate.get("apce"),
+            },
+            "sender_bundle_source": "local",
+            "state_pre_digest": self.fcvc_persistent_state_digest(),
+            "next_crop_pre_digest": self.fcvc_next_crop_digest(),
+        }
+        frozen = self._fcvc_clone_runtime_value(payload)
+        frozen["sender_source_digest"] = self.fcvc_sender_source_digest(frozen)
+        return frozen
+
+    @staticmethod
+    def _fcvc_mark_candidate(candidate, provenance):
+        marked = EnTeRTrack._fcvc_clone_runtime_value(candidate)
+        marked["_fcvc_provenance"] = str(provenance)
+        return marked
+
+    @staticmethod
+    def _fcvc_candidate_is_valid_for_report(candidate):
+        try:
+            bbox = candidate["target_bbox"]
+            if len(bbox) != 4:
+                return False, "bbox length"
+            values = [float(item) for item in bbox]
+            if not all(math.isfinite(item) for item in values):
+                return False, "nonfinite bbox"
+            if values[2] <= 0.0 or values[3] <= 0.0:
+                return False, "nonpositive bbox size"
+            for key in ("max_score", "apce"):
+                if key in candidate:
+                    value = candidate[key]
+                    if torch.is_tensor(value):
+                        if not torch.isfinite(value).all():
+                            return False, "nonfinite {}".format(key)
+                    elif not math.isfinite(float(value)):
+                        return False, "nonfinite {}".format(key)
+            return True, "ok"
+        except Exception as exc:
+            return False, "invalid candidate: {}".format(exc)
+
+    def fcvc_predict_frame(self, image=None, info=None, local_candidate=None,
+                           collaborative_candidate=None, collaborative_fn=None,
+                           search_factor=None, debug_assertions=False):
+        """Create local/collaborative candidates without committing state."""
+        pre_digest = self.fcvc_persistent_state_digest()
+        if local_candidate is None:
+            local_candidate = self._run_candidate(
+                image=image,
+                search_factor=search_factor,
+                return_score=True,
+            )
+        local_candidate = self._fcvc_mark_candidate(local_candidate, "local")
+        local_payload = self.fcvc_freeze_local_runtime_payload(local_candidate)
+        if debug_assertions:
+            if local_payload.get("provenance") != "local":
+                raise AssertionError("local runtime payload must be local")
+            if self.fcvc_persistent_state_digest() != pre_digest:
+                raise AssertionError("predict_frame must not commit state")
+
+        if collaborative_candidate is None and collaborative_fn is not None:
+            collaborative_candidate = collaborative_fn(local_payload)
+        if collaborative_candidate is None:
+            collaborative_candidate = local_candidate
+        collaborative_candidate = self._fcvc_mark_candidate(
+            collaborative_candidate,
+            "collaborative"
+            if collaborative_candidate is not local_candidate else "local")
+        valid, reason = self._fcvc_candidate_is_valid_for_report(
+            collaborative_candidate)
+        if not valid:
+            collaborative_candidate = self._fcvc_mark_candidate(
+                local_candidate, "local")
+            collaborative_diagnostics = {
+                "report_fallback": True,
+                "fallback_reason": reason,
+            }
+        else:
+            collaborative_diagnostics = {
+                "report_fallback": False,
+                "fallback_reason": "ok",
+            }
+        result = FrameTrackingResult(
+            local_candidate=local_candidate,
+            collaborative_candidate=collaborative_candidate,
+            state_output=local_candidate,
+            reported_output=collaborative_candidate,
+            local_runtime_payload=local_payload,
+            local_diagnostics={
+                "state_pre_digest": pre_digest,
+                "next_crop_pre_digest": local_payload["next_crop_pre_digest"],
+                "sender_source_digest": local_payload["sender_source_digest"],
+            },
+            collaborative_diagnostics=collaborative_diagnostics,
+        )
+        if debug_assertions:
+            if result.state_output.get("_fcvc_provenance") != "local":
+                raise AssertionError("state_output provenance must be local")
+            if result.reported_output.get("_fcvc_provenance") not in (
+                    "collaborative", "local"):
+                raise AssertionError("reported_output provenance invalid")
+        return result
+
+    def fcvc_commit_state(self, state_output, local_runtime_payload,
+                          info=None, debug_name="", debug_assertions=False):
+        """Commit only the local state_output and local runtime payload."""
+        if debug_assertions:
+            if state_output.get("_fcvc_provenance") != "local":
+                raise AssertionError(
+                    "FCVC commit_state refuses collaborative provenance")
+            if local_runtime_payload.get("provenance") != "local":
+                raise AssertionError("local payload provenance must be local")
+        committed = self._commit_state_from_candidate(
+            state_output, info=info, debug_name=debug_name)
+        return committed["output"]
+
+    def fcvc_emit_report(self, reported_output, debug_assertions=False):
+        """Return the report candidate output without mutating state."""
+        before = self.fcvc_persistent_state_digest() if debug_assertions else None
+        valid, reason = self._fcvc_candidate_is_valid_for_report(reported_output)
+        if not valid:
+            raise ValueError("invalid FCVC reported output: {}".format(reason))
+        output = self._fcvc_clone_runtime_value(reported_output["output"])
+        if debug_assertions and self.fcvc_persistent_state_digest() != before:
+            raise AssertionError("emit_report mutated persistent state")
+        return output
+
+    def fcvc_commit_frame_result(self, frame_result, info=None, debug_name="",
+                                 debug_assertions=False):
+        """Commit local state and emit collaborative report under Safe Commit."""
+        pre_frame_digest = self.fcvc_persistent_state_digest()
+        report_candidate = frame_result.reported_output
+        valid, reason = self._fcvc_candidate_is_valid_for_report(report_candidate)
+        if not valid:
+            report_candidate = frame_result.local_candidate
+            report_fallback_reason = reason
+        else:
+            report_fallback_reason = frame_result.collaborative_diagnostics.get(
+                "fallback_reason", "ok")
+
+        self.fcvc_commit_state(
+            frame_result.state_output,
+            frame_result.local_runtime_payload,
+            info=info,
+            debug_name=debug_name,
+            debug_assertions=debug_assertions,
+        )
+        reported = self._fcvc_clone_runtime_value(report_candidate["output"])
+        reported = self._attach_motion_shadow_diagnostics(
+            frame_result.state_output, reported)
+        reported["fcvc_safe_commit"] = {
+            "state_output_provenance": frame_result.state_output.get(
+                "_fcvc_provenance"),
+            "reported_output_provenance": report_candidate.get(
+                "_fcvc_provenance"),
+            "pre_frame_digest": pre_frame_digest,
+            "post_commit_digest": self.fcvc_persistent_state_digest(),
+            "next_crop_digest": self.fcvc_next_crop_digest(),
+            "sender_source_digest": frame_result.local_runtime_payload[
+                "sender_source_digest"],
+            "report_fallback_reason": report_fallback_reason,
+        }
+        after_report_digest = self.fcvc_persistent_state_digest()
+        if debug_assertions:
+            if reported["fcvc_safe_commit"]["post_commit_digest"] != after_report_digest:
+                raise AssertionError("reported output changed persistent state")
+            if self.state != frame_result.state_output["target_bbox"]:
+                raise AssertionError("next crop state must come from local")
+            if frame_result.local_runtime_payload.get("sender_bundle_source") != "local":
+                raise AssertionError("sender bundle source must be local")
+        return reported
+
+    def _motion_remote_diagnostics(self, candidate):
+        diagnostics = candidate.get("remote_aggregation_diagnostics", None)
+        if not isinstance(diagnostics, dict):
+            return None, None, None, None
+
+        def scalar(name):
+            value = diagnostics.get(name, None)
+            if value is None:
+                return None
+            if torch.is_tensor(value):
+                if value.numel() == 0:
+                    return None
+                value = value.detach().reshape(-1)[0].cpu().item()
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                return None
+            return value if math.isfinite(value) else None
+
+        return (
+            scalar("remote_quality_mean"),
+            scalar("remote_weight_entropy"),
+            scalar("remote_weight_max"),
+            scalar("valid_remote_count"),
+        )
+
+    def _attach_motion_shadow_diagnostics(self, candidate, output):
+        """Update M0 diagnostics without changing any tracking value."""
+        if self.motion_state_manager is None:
+            return output
+        remote_quality, remote_entropy, remote_max, valid_remote = (
+            self._motion_remote_diagnostics(candidate)
+        )
+        image = candidate.get("image", None)
+        image_size = image.shape[:2] if image is not None else None
+        record = self.motion_state_manager.update_prediction_only(
+            frame_id=self.frame_id,
+            predicted_bbox=candidate["target_bbox"],
+            max_score=candidate.get("max_score", None),
+            apce=candidate.get("apce", None),
+            response=candidate.get("response", None),
+            image_size=image_size,
+            remote_quality=remote_quality,
+            remote_weight_entropy=remote_entropy,
+            remote_max_weight=remote_max,
+            valid_remote_count=valid_remote,
+        )
+        if self.motion_state_log_enabled:
+            output["motion_state_diagnostics"] = record
+        return output
 
     def _score_value(self, score):
         return score.item() if torch.is_tensor(score) else float(score)
@@ -478,6 +1729,144 @@ class EnTeRTrack(BaseTracker):
         score = max(0.0, min(1.0, self._score_value(candidate["max_score"])))
         apce = max(0.0, min(1.0, self._score_value(candidate["apce"]) / apce_norm))
         return score * apce
+
+    def _candidate_motion_reliability(self, candidate):
+        if candidate is None:
+            return 0.0
+        prev_bbox = candidate.get("prev_bbox", None)
+        target_bbox = candidate.get("target_bbox", None)
+        if prev_bbox is None or target_bbox is None:
+            motion_score = 1.0
+        else:
+            try:
+                px = float(prev_bbox[0]) + 0.5 * float(prev_bbox[2])
+                py = float(prev_bbox[1]) + 0.5 * float(prev_bbox[3])
+                cx = float(target_bbox[0]) + 0.5 * float(target_bbox[2])
+                cy = float(target_bbox[1]) + 0.5 * float(target_bbox[3])
+                scale = max(
+                    (float(prev_bbox[2]) * float(prev_bbox[3])) ** 0.5,
+                    1.0,
+                )
+                normalized_motion = ((cx - px) ** 2 + (cy - py) ** 2) ** 0.5 / scale
+            except Exception:
+                normalized_motion = 0.0
+            pcum_test_cfg = getattr(self.cfg.TEST, "PCUM", None)
+            max_norm_motion = max(float(getattr(
+                pcum_test_cfg,
+                "MOTION_REDETECT_MAX_NORM_MOTION",
+                2.0,
+            )), 1e-6)
+            motion_score = max(0.0, min(1.0, 1.0 - normalized_motion / max_norm_motion))
+
+        return self._candidate_confidence(candidate) * motion_score
+
+    def _selector_record(
+        self,
+        selector_mode,
+        decision=None,
+        num_remote_prompts=0,
+        selected_source=0.0,
+    ):
+        if decision is None:
+            decision = {
+                "use_collaborative": False,
+                "local_confidence": float("nan"),
+                "collaborative_confidence": float("nan"),
+                "confidence_delta": float("nan"),
+                "collaborative_motion_reliability": float("nan"),
+                "margin": float("nan"),
+                "motion_threshold": float("nan"),
+            }
+        selector_enabled = 1.0 if selector_mode == "deterministic" else 0.0
+        return [
+            selector_enabled,
+            1.0 if decision.get("use_collaborative", False) else 0.0,
+            float(decision.get("local_confidence", float("nan"))),
+            float(decision.get("collaborative_confidence", float("nan"))),
+            float(decision.get("confidence_delta", float("nan"))),
+            float(decision.get("collaborative_motion_reliability", float("nan"))),
+            float(decision.get("margin", float("nan"))),
+            float(decision.get("motion_threshold", float("nan"))),
+            float(num_remote_prompts),
+            float(selected_source),
+        ]
+
+    def _remote_aggregation_record(self, candidate):
+        if candidate is None or not self.remote_weight_diagnostics_enabled:
+            return None
+        diagnostics = candidate.get("remote_aggregation_diagnostics", None)
+        weights = candidate.get("remote_weights", None)
+        if not isinstance(diagnostics, dict) or not torch.is_tensor(weights):
+            return None
+
+        weights = weights.detach().float().reshape(weights.shape[0], -1)[0].cpu()
+        state = candidate.get("remote_states", None)
+        uav_indices = None
+        if isinstance(state, dict):
+            uav_indices = state.get("per_remote_uav_indices", None)
+        if torch.is_tensor(uav_indices):
+            uav_indices = uav_indices.detach().reshape(uav_indices.shape[0], -1)[0].cpu()
+        else:
+            uav_indices = torch.arange(weights.numel(), dtype=torch.long)
+
+        global_weights = torch.zeros(3, dtype=torch.float32)
+        for slot, weight in enumerate(weights):
+            if slot >= uav_indices.numel():
+                break
+            index = int(uav_indices[slot].item())
+            if 0 <= index < global_weights.numel():
+                global_weights[index] = float(weight.item())
+
+        def scalar(name, default=float("nan")):
+            value = diagnostics.get(name, None)
+            if value is None:
+                return float(default)
+            if torch.is_tensor(value):
+                value = value.detach().reshape(-1)[0].cpu().item()
+            return float(value)
+
+        selected_slot = int(scalar("selected_remote_index", 0.0))
+        selected_uav = (
+            int(uav_indices[selected_slot].item())
+            if 0 <= selected_slot < uav_indices.numel() else -1
+        )
+        return [
+            scalar("remote_weight_entropy"),
+            scalar("remote_weight_max"),
+            scalar("remote_weight_mean"),
+            float(selected_uav),
+            scalar("valid_remote_count"),
+            scalar("remote_quality_mean"),
+            scalar("remote_quality_min"),
+            scalar("remote_quality_max"),
+            scalar("fallback_to_uniform", 0.0),
+            float(global_weights[0].item()),
+            float(global_weights[1].item()),
+            float(global_weights[2].item()),
+        ]
+
+    def _remote_suppression_record(self, candidate):
+        if candidate is None:
+            return None
+
+        def scalar(name, default=float("nan")):
+            value = candidate.get(name, None)
+            if value is None:
+                return float(default)
+            if torch.is_tensor(value):
+                value = value.detach().reshape(-1)[0].cpu().item()
+            return float(value)
+
+        suppress = scalar("remote_suppression")
+        if not math.isfinite(suppress):
+            return None
+        return [
+            suppress,
+            1.0 - suppress,
+            scalar("remote_delta_norm"),
+            scalar("suppressed_delta_norm"),
+            scalar("remote_suppression_active_ratio", 0.0),
+        ]
 
     def _diagnostic_candidate_snapshot(self, candidate):
         if candidate is None:
@@ -509,6 +1898,464 @@ class EnTeRTrack(BaseTracker):
             return_score=True
         )
 
+    def c3r_local_candidate(self, image):
+        """Run and retain exactly one ordinary local EnTeR candidate."""
+        if not self.c3r_enabled:
+            raise RuntimeError("C3R local candidate requested while disabled")
+        return self._run_candidate(
+            image=image,
+            search_factor=None,
+            return_score=True,
+        )
+
+    def c3r_build_packet(self, candidate, target_id, sender_id,
+                         frame_id, timestamp_ms):
+        """Serialize one prediction-only local packet for orchestration."""
+        image = candidate.get("image", None)
+        if image is None:
+            raise ValueError("C3R candidate is missing its local image shape")
+        height, width = image.shape[:2]
+        return build_packet_record(
+            c3r=self.network.c3r,
+            feat_len_s=self.network.feat_len_s,
+            candidate=candidate,
+            target_id=target_id,
+            sender_id=sender_id,
+            frame_id=frame_id,
+            timestamp_ms=timestamp_ms,
+            image_height=height,
+            image_width=width,
+        )
+
+    def _c3r_candidate_from_head(self, local_candidate, head_output):
+        """Decode a C3R head rerun using the unchanged local crop/state."""
+        pred_box, pred_boxes, max_score, response = self._decode_prediction(
+            head_output,
+            local_candidate["resize_factor"],
+            return_score=True,
+        )
+        image = local_candidate["image"]
+        height, width = image.shape[:2]
+        crop_bbox = local_candidate["crop_bbox"]
+        target_bbox = clip_box(
+            self.map_box_back(
+                pred_box,
+                local_candidate["resize_factor"],
+                reference_bbox=crop_bbox,
+            ),
+            height,
+            width,
+            margin=10,
+        )
+        if self.save_all_boxes:
+            all_boxes = self.map_box_back_batch(
+                pred_boxes * self.params.search_size
+                / local_candidate["resize_factor"],
+                local_candidate["resize_factor"],
+                reference_bbox=crop_bbox,
+            )
+            output = {
+                "target_bbox": target_bbox,
+                "all_boxes": all_boxes.view(-1).tolist(),
+            }
+        else:
+            output = {"target_bbox": target_bbox}
+        candidate = dict(local_candidate)
+        candidate.update({
+            "output": output,
+            "target_bbox": target_bbox,
+            "max_score": max_score,
+            "apce": self.calAPCE(response),
+            "response": response,
+            "out_dict": head_output,
+            "pred_boxes": pred_boxes,
+            "used_remote": True,
+        })
+        return candidate
+
+    def c3r_counterfactual_candidates(self, local_candidate, packets,
+                                      context: C3RReceiverContext):
+        """Head-only fixed-gate branches that never commit tracker state."""
+        if not self.c3r_enabled:
+            raise RuntimeError("C3R counterfactual requested while disabled")
+
+        diagnostics_enabled = bool(
+            self.temporal_gate_counterfactual_diagnostics)
+        shared_pre_state_digest = self._counterfactual_state_digest()
+        backbone_count_before = int(
+            self._temporal_gate_backbone_forward_count)
+        branch_traces = {
+            "local": {
+                "pre_state_digest": shared_pre_state_digest,
+                "post_state_digest": shared_pre_state_digest,
+                "executed_gates": [],
+                "sender_provenance": [],
+            }
+        }
+
+        def branch(selected_packets, branch_name):
+            pre_state_digest = self._counterfactual_state_digest()
+            if diagnostics_enabled and pre_state_digest != shared_pre_state_digest:
+                raise AssertionError(
+                    "counterfactual branches must share one pre-state digest")
+            branch_context = C3RReceiverContext(
+                target_id=context.target_id,
+                receiver_id=context.receiver_id,
+                sequence_hash=context.sequence_hash,
+                frame_id=context.frame_id,
+                timestamp_ms=context.timestamp_ms,
+                frame_interval_ms=context.frame_interval_ms,
+                last_frame_by_sender=dict(context.last_frame_by_sender),
+            )
+            provenance = [self._counterfactual_packet_provenance(packet)
+                          for packet in selected_packets]
+            executed_gates = []
+
+            def fixed_gate(sender_id, vector):
+                gate = vector.new_tensor(0.25)
+                executed_gates.append({
+                    "sender_id": int(sender_id),
+                    "gate": float(gate.detach().cpu().item()),
+                })
+                return gate
+
+            result = collaborate_local_candidate(
+                c3r=self.network.c3r,
+                forward_head=self.network.forward_head,
+                feat_len_s=self.network.feat_len_s,
+                candidate=local_candidate,
+                packets=tuple(selected_packets),
+                context=branch_context,
+                gate_provider=fixed_gate,
+            )
+            candidate = (self._c3r_candidate_from_head(local_candidate, result.output)
+                         if result.used_remote else local_candidate)
+            sender_ids = tuple(int(value) for value in result.collaboration.get(
+                "accepted_sender_ids", ()))
+            post_state_digest = self._counterfactual_state_digest()
+            trace = {
+                "pre_state_digest": pre_state_digest,
+                "post_state_digest": post_state_digest,
+                "executed_gates": executed_gates,
+                "sender_provenance": provenance,
+            }
+            if diagnostics_enabled:
+                if post_state_digest != shared_pre_state_digest:
+                    raise AssertionError(
+                        "counterfactual branch mutated tracker state")
+                if any(item["gate"] != 0.25 for item in executed_gates):
+                    raise AssertionError(
+                        "sender-only override gate must execute as exactly 0.25")
+                provenance_senders = tuple(
+                    item["sender_id"] for item in provenance)
+                executed_senders = tuple(
+                    item["sender_id"] for item in executed_gates)
+                if sender_ids != provenance_senders or sender_ids != executed_senders:
+                    raise AssertionError(
+                        "counterfactual sender provenance mismatch")
+            branch_traces[branch_name] = trace
+            return candidate, sender_ids
+
+        sender_only = {}
+        for packet in packets:
+            packet_trace = self._counterfactual_packet_provenance(packet)
+            branch_name = "sender{}_only".format(packet_trace["sender_id"])
+            candidate, sender_ids = branch((packet,), branch_name)
+            if len(sender_ids) == 1:
+                sender_only[int(sender_ids[0])] = candidate
+        both_candidate, both_sender_ids = branch(tuple(packets), "both_sender")
+        backbone_count_after = int(self._temporal_gate_backbone_forward_count)
+        if diagnostics_enabled and backbone_count_after != backbone_count_before:
+            raise AssertionError(
+                "counterfactual branches must not add a backbone forward")
+        return {
+            "local": local_candidate,
+            "sender_only": sender_only,
+            "both": both_candidate,
+            "both_sender_ids": both_sender_ids,
+            "diagnostics": {
+                "enabled": diagnostics_enabled,
+                "shared_pre_state_digest": shared_pre_state_digest,
+                "branches": branch_traces,
+                "backbone_forward_count_before": backbone_count_before,
+                "backbone_forward_count_after": backbone_count_after,
+                "no_additional_backbone_forward": (
+                    backbone_count_before == backbone_count_after),
+            },
+        }
+
+    @staticmethod
+    def _counterfactual_digest(value):
+        digest = hashlib.sha256()
+
+        def update(item):
+            if torch.is_tensor(item):
+                tensor = item.detach().cpu().contiguous()
+                digest.update(b"tensor:")
+                digest.update(str(tensor.dtype).encode("utf-8"))
+                digest.update(json.dumps(list(tensor.shape)).encode("utf-8"))
+                digest.update(tensor.numpy().tobytes())
+            elif isinstance(item, dict):
+                digest.update(b"dict{")
+                for key in sorted(item, key=lambda value: str(value)):
+                    update(str(key))
+                    update(item[key])
+                digest.update(b"}")
+            elif isinstance(item, (list, tuple)):
+                digest.update(b"sequence[")
+                for value_item in item:
+                    update(value_item)
+                digest.update(b"]")
+            else:
+                digest.update(json.dumps(
+                    item, sort_keys=True, allow_nan=False,
+                    separators=(",", ":")).encode("utf-8"))
+
+        update(value)
+        return digest.hexdigest()
+
+    def _counterfactual_state_digest(self):
+        return self._counterfactual_digest({
+            "state": copy.deepcopy(self.state),
+            "frame_id": int(self.frame_id),
+            "last_frame_by_sender": dict(self.c3r_last_frame_by_sender),
+        })
+
+    def _counterfactual_packet_provenance(self, packet):
+        if hasattr(packet, "sender_id"):
+            payload = self.network.c3r.codec.serialize(packet)
+        else:
+            payload = bytes(packet)
+        parsed = self.network.c3r.codec.parse(payload)
+        return {
+            "sender_id": int(parsed.sender_id),
+            "payload_sha256": hashlib.sha256(payload).hexdigest(),
+            "packet_bytes": len(payload),
+        }
+
+    def _counterfactual_candidate_digest(self, candidate):
+        return self._counterfactual_digest({
+            "target_bbox": candidate["target_bbox"],
+            "pred_boxes": candidate.get("pred_boxes"),
+            "response": candidate.get("response"),
+        })
+
+    def _audit_behavior_candidate_submission(self, counterfactual, candidate):
+        if str(self.network.c3r.variant) != "c1":
+            raise AssertionError(
+                "only the frozen C1 behavior candidate may be submitted")
+        counterfactual_candidates = (
+            tuple(counterfactual["sender_only"].values())
+            + (counterfactual["both"],))
+        if any(candidate is value for value in counterfactual_candidates):
+            raise AssertionError(
+                "a counterfactual candidate was submitted for commit")
+        behavior_digest = self._counterfactual_candidate_digest(candidate)
+        counterfactual["diagnostics"].update({
+            "behavior_variant": "c1",
+            "behavior_candidate_digest": behavior_digest,
+            "submitted_candidate_digest": behavior_digest,
+            "only_frozen_c1_behavior_submitted": True,
+        })
+        return counterfactual["diagnostics"]
+
+    @staticmethod
+    def _counterfactual_source_diagnostic_fields(counterfactual, sender_id):
+        diagnostic = counterfactual["diagnostics"]
+        branch_name = "sender{}_only".format(int(sender_id))
+        branch_trace = diagnostic["branches"][branch_name]
+        provenance = branch_trace["sender_provenance"][0]
+        executed = branch_trace["executed_gates"][0]
+        return {
+            "counterfactual_sender_only_executed_gate": executed["gate"],
+            "counterfactual_sender_payload_sha256":
+                provenance["payload_sha256"],
+            "counterfactual_sender_provenance_id": provenance["sender_id"],
+            "counterfactual_shared_pre_state_digest":
+                diagnostic["shared_pre_state_digest"],
+            "counterfactual_branch_pre_state_digests": {
+                name: trace["pre_state_digest"]
+                for name, trace in diagnostic["branches"].items()
+            },
+            "counterfactual_branch_post_state_digests": {
+                name: trace["post_state_digest"]
+                for name, trace in diagnostic["branches"].items()
+            },
+            "counterfactual_no_additional_backbone_forward":
+                diagnostic["no_additional_backbone_forward"],
+            "counterfactual_only_frozen_c1_behavior_submitted":
+                diagnostic["only_frozen_c1_behavior_submitted"],
+            "counterfactual_behavior_candidate_digest":
+                diagnostic["behavior_candidate_digest"],
+            "counterfactual_submitted_candidate_digest":
+                diagnostic["submitted_candidate_digest"],
+        }
+
+    def c3r_track_with_packets(self, info, local_candidate, packets,
+                               context: C3RReceiverContext,
+                               sent_packets=1, debug_name=""):
+        """Commit one explicit C3R receiver step without a second backbone."""
+        if not self.c3r_enabled:
+            raise RuntimeError("C3R packet tracking requested while disabled")
+        self.frame_id += 1
+        if int(context.frame_id) != int(self.frame_id):
+            raise ValueError("C3R context frame does not match tracker frame")
+        if context.last_frame_by_sender is not self.c3r_last_frame_by_sender:
+            raise ValueError("C3R replay state must belong to this tracker")
+        counterfactual = None
+        if self.temporal_gate_rollout_capture:
+            if self.temporal_gate_enabled:
+                raise RuntimeError("behavior rollout must commit unchanged current C1")
+            counterfactual = self.c3r_counterfactual_candidates(
+                local_candidate, tuple(packets), context)
+        gate_provider = None
+        if self.temporal_gate_enabled:
+            if self.temporal_gate_runtime is None:
+                raise RuntimeError("Temporal Gate enabled without runtime")
+            gate_provider = lambda sender_id, vector: self.temporal_gate_runtime.gate_for(
+                context.target_id, context.receiver_id, sender_id,
+                context.frame_id, vector)
+        head_result = collaborate_local_candidate(
+            c3r=self.network.c3r,
+            forward_head=self.network.forward_head,
+            feat_len_s=self.network.feat_len_s,
+            candidate=local_candidate,
+            packets=tuple(packets),
+            context=context,
+            instrumentation=self.c3r_instrumentation_enabled,
+            remote_information_diagnostics=
+                self.remote_information_diagnostics,
+            gate_provider=gate_provider,
+        )
+        if head_result.used_remote:
+            candidate = self._c3r_candidate_from_head(
+                local_candidate, head_result.output)
+        else:
+            candidate = local_candidate
+        if (counterfactual is not None
+                and self.temporal_gate_counterfactual_diagnostics):
+            self._audit_behavior_candidate_submission(
+                counterfactual, candidate)
+        dispositions = head_result.collaboration.get("dispositions", ())
+        received_by_peer = {}
+        for item in dispositions:
+            if item.sender_id is not None:
+                peer = int(item.sender_id)
+                received_by_peer[peer] = received_by_peer.get(peer, 0) + 1
+        self.c3r_message_accounting.record_frame(
+            sent=int(sent_packets),
+            received=len(tuple(packets)),
+            accepted=int(head_result.collaboration.get("accepted_count", 0)),
+            received_by_peer=received_by_peer,
+        )
+        output = self._commit_candidate(
+            candidate, info=info, debug_name=debug_name)
+        output["c3r_diagnostics"] = c3r_diagnostic_row(
+            target_id=context.target_id,
+            receiver_id=context.receiver_id,
+            context=context,
+            sent_packets=int(sent_packets),
+            received_packets=len(tuple(packets)),
+            collaboration=head_result.collaboration,
+        )
+        if self.c3r_instrumentation_enabled:
+            local_quality = self.network.c3r.encoder.response_quality(
+                local_candidate["out_dict"]["score_map"])[0].detach().float().cpu().tolist()
+            final_quality = self.network.c3r.encoder.response_quality(
+                candidate["out_dict"]["score_map"])[0].detach().float().cpu().tolist()
+            common = {
+                "fold_id": self.c3r_instrumentation_fold_id,
+                "target_id": context.target_id,
+                "sequence_id": "{}-{}".format(
+                    context.target_id, int(context.receiver_id) + 1),
+                "receiver_view": int(context.receiver_id),
+                "frame_id": int(context.frame_id),
+                "timestamp_ms": int(context.timestamp_ms),
+                "local_bbox_xywh": [float(value) for value in local_candidate["target_bbox"]],
+                "c1_bbox_xywh": [float(value) for value in candidate["target_bbox"]],
+                "tracker_state_before_xywh": [
+                    float(value) for value in local_candidate.get("prev_bbox", ())],
+                "tracker_state_after_xywh": [float(value) for value in self.state],
+                "local_score": self._score_value(local_candidate["max_score"]),
+                "c1_score": self._score_value(candidate["max_score"]),
+                "local_confidence": self._candidate_confidence(local_candidate),
+                "c1_confidence": self._candidate_confidence(candidate),
+                "local_apce": self._score_value(local_candidate["apce"]),
+                "c1_apce": self._score_value(candidate["apce"]),
+                "local_response_quality": local_quality,
+                "c1_response_quality": final_quality,
+                "uses_gt": False,
+            }
+            source_rows = []
+            for source in head_result.collaboration.get(
+                    "instrumentation_source_rows", ()):
+                row = dict(common)
+                row.update(copy.deepcopy(source))
+                row["sender_view"] = int(row.pop("sender_id"))
+                if counterfactual is not None:
+                    sender_candidate = counterfactual["sender_only"].get(
+                        row["sender_view"])
+                    if sender_candidate is None:
+                        raise RuntimeError(
+                            "accepted sender missing counterfactual branch")
+                    row["sender_only_gate_0.25_bbox_xywh"] = [
+                        float(value) for value in sender_candidate["target_bbox"]]
+                    row["both_senders_gate_0.25_bbox_xywh"] = [
+                        float(value) for value in counterfactual["both"]["target_bbox"]]
+                    row["behavior_c1_bbox_xywh"] = [
+                        float(value) for value in candidate["target_bbox"]]
+                    if self.remote_information_diagnostics:
+                        sender_quality = self.network.c3r.encoder.response_quality(
+                            sender_candidate["out_dict"]["score_map"]
+                        )[0].detach().float().cpu().tolist()
+                        both_quality = self.network.c3r.encoder.response_quality(
+                            counterfactual["both"]["out_dict"]["score_map"]
+                        )[0].detach().float().cpu().tolist()
+                        row.update({
+                            "sender_only_score": self._score_value(
+                                sender_candidate["max_score"]),
+                            "sender_only_confidence":
+                                self._candidate_confidence(sender_candidate),
+                            "sender_only_apce": self._score_value(
+                                sender_candidate["apce"]),
+                            "sender_only_response_quality": sender_quality,
+                            "both_senders_score": self._score_value(
+                                counterfactual["both"]["max_score"]),
+                            "both_senders_confidence":
+                                self._candidate_confidence(
+                                    counterfactual["both"]),
+                            "both_senders_apce": self._score_value(
+                                counterfactual["both"]["apce"]),
+                            "both_senders_response_quality": both_quality,
+                        })
+                    row["model_input_fields"] = ["reliability_input_normalized"]
+                    row["uses_gt_for_features"] = False
+                    if self.temporal_gate_counterfactual_diagnostics:
+                        row.update(
+                            self._counterfactual_source_diagnostic_fields(
+                                counterfactual, row["sender_view"]))
+                source_rows.append(row)
+            aggregate = dict(common)
+            aggregate.update(copy.deepcopy(head_result.collaboration.get(
+                "instrumentation_aggregate", {})))
+            aggregate["accepted_sender_views"] = [
+                int(value) for value in head_result.collaboration.get(
+                "accepted_sender_ids", ())]
+            if counterfactual is not None:
+                aggregate["counterfactual_diagnostics"] = copy.deepcopy(
+                    counterfactual["diagnostics"])
+            output["c3r_source_instrumentation"] = source_rows
+            output["c3r_aggregate_instrumentation"] = aggregate
+        return output, candidate["max_score"], candidate["apce"]
+
+    def reset_temporal_gate(self, target_id=None, receiver_id=None):
+        """Reset sidecar histories at initialization without touching C1 state."""
+        if self.temporal_gate_runtime is not None:
+            self.temporal_gate_runtime.reset()
+
+    def c3r_accounting_report(self):
+        return self.c3r_message_accounting.report(peers=2, broadcast=True)
+
     def pcum_track_with_remote(
         self,
         image,
@@ -531,6 +2378,16 @@ class EnTeRTrack(BaseTracker):
         remote_prompts = [p for p in (remote_prompts or []) if p is not None]
         pcum_test_cfg = getattr(self.cfg.TEST, "PCUM", None)
         save_decision = bool(getattr(pcum_test_cfg, "SAVE_DECISION_LOG", False))
+        selector_mode = validate_reliability_selector(getattr(
+            pcum_test_cfg,
+            "RELIABILITY_SELECTOR",
+            "none",
+        ))
+        selector_diagnostics = bool(getattr(
+            pcum_test_cfg,
+            "SELECTOR_DIAGNOSTICS",
+            True,
+        ))
         redetect_triggered = search_factor is not None
         local_source = 0.0
         selected_source = 0.0
@@ -538,6 +2395,7 @@ class EnTeRTrack(BaseTracker):
         redetect_local_conf = -1.0
         remote_candidate_conf = -1.0
         raw_collaborative_candidate = None
+        selector_decision = None
 
         if search_factor is not None and local_candidate is not None:
             use_redetect_local = bool(getattr(
@@ -585,7 +2443,27 @@ class EnTeRTrack(BaseTracker):
             selected_source = 2.0
             remote_candidate_conf = self._candidate_confidence(candidate)
 
-            keep_local = bool(getattr(pcum_test_cfg, "KEEP_LOCAL_IF_REMOTE_WORSE", True))
+            if selector_mode == "deterministic" and local_candidate is not None:
+                selector_decision = deterministic_reliability_selector_decision(
+                    local_confidence=self._candidate_confidence(local_candidate),
+                    collaborative_confidence=remote_candidate_conf,
+                    collaborative_motion_reliability=self._candidate_motion_reliability(candidate),
+                    margin=float(getattr(pcum_test_cfg, "SELECTOR_MARGIN", 0.0)),
+                    motion_threshold=float(getattr(
+                        pcum_test_cfg,
+                        "SELECTOR_MOTION_THRESHOLD",
+                        0.0,
+                    )),
+                )
+                if not selector_decision["use_collaborative"]:
+                    candidate = local_candidate
+                    selected_source = local_source
+                    fallback_reason = 4.0
+
+            keep_local = (
+                selector_mode == "none"
+                and bool(getattr(pcum_test_cfg, "KEEP_LOCAL_IF_REMOTE_WORSE", True))
+            )
             max_drop = float(getattr(pcum_test_cfg, "REMOTE_SCORE_MAX_DROP", 0.05))
             if keep_local and local_candidate is not None:
                 local_score = self._score_value(local_candidate["max_score"])
@@ -614,7 +2492,28 @@ class EnTeRTrack(BaseTracker):
                         selected_source = local_source
                         fallback_reason = 3.0
 
+        candidate, mcr_record = self._apply_mcr(
+            image, candidate, remote_prompts=remote_prompts, remote_states=remote_states)
         output = self._commit_candidate(candidate, info=info, debug_name=debug_name)
+        if mcr_record is not None:
+            output["mcr_diagnostics"] = mcr_record
+        output = self._attach_motion_shadow_diagnostics(candidate, output)
+        remote_weight_record = self._remote_aggregation_record(
+            raw_collaborative_candidate
+        )
+        if remote_weight_record is not None:
+            output["pcum_remote_weights"] = remote_weight_record
+        remote_suppression_record = self._remote_suppression_record(
+            raw_collaborative_candidate)
+        if remote_suppression_record is not None:
+            output["pcum_remote_suppression"] = remote_suppression_record
+        if selector_diagnostics:
+            output["pcum_selector"] = self._selector_record(
+                selector_mode,
+                selector_decision,
+                num_remote_prompts=len(remote_prompts),
+                selected_source=selected_source,
+            )
         if self.pcum_diagnostics_enabled:
             source_names = {
                 0.0: "local",
@@ -626,6 +2525,7 @@ class EnTeRTrack(BaseTracker):
                 1.0: "no_remote_prompt",
                 2.0: "remote_score_drop",
                 3.0: "remote_confidence_drop",
+                4.0: "reliability_selector",
             }
             self.last_pcum_diagnostic = {
                 "local": self._diagnostic_candidate_snapshot(local_candidate),
@@ -634,7 +2534,7 @@ class EnTeRTrack(BaseTracker):
                 ),
                 "final": self._diagnostic_candidate_snapshot(candidate),
                 "final_source": source_names.get(selected_source, "unknown"),
-                "fallback_triggered": fallback_reason in (2.0, 3.0),
+                "fallback_triggered": fallback_reason in (2.0, 3.0, 4.0),
                 "fallback_reason": fallback_names.get(fallback_reason, "unknown"),
             }
         if save_decision:
@@ -683,7 +2583,12 @@ class EnTeRTrack(BaseTracker):
             remote_states=remote_states,
             return_score=return_score_apce
         )
+        candidate, mcr_record = self._apply_mcr(
+            image, candidate, remote_prompts=remote_prompts, remote_states=remote_states)
         output = self._commit_candidate(candidate, info=info, debug_name=debug_name)
+        if mcr_record is not None:
+            output["mcr_diagnostics"] = mcr_record
+        output = self._attach_motion_shadow_diagnostics(candidate, output)
 
         if return_score_apce:
             return output, candidate["max_score"], candidate["apce"]
@@ -919,23 +2824,31 @@ class EnTeRTrack(BaseTracker):
     ):
         if not self.use_visdom:
             x1, y1, w, h = self.state
-            image_BGR = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-
-            cv2.rectangle(
-                image_BGR,
-                (int(x1), int(y1)),
-                (int(x1 + w), int(y1 + h)),
-                color=(0, 0, 255),
-                thickness=2
-            )
-
             suffix = "" if debug_name == "" else "_" + str(debug_name)
             save_path = os.path.join(
                 self.save_dir,
                 "%04d%s.jpg" % (self.frame_id, suffix)
             )
 
-            cv2.imwrite(save_path, image_BGR)
+            if cv2 is not None:
+                image_BGR = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+                cv2.rectangle(
+                    image_BGR,
+                    (int(x1), int(y1)),
+                    (int(x1 + w), int(y1 + h)),
+                    color=(0, 0, 255),
+                    thickness=2
+                )
+                cv2.imwrite(save_path, image_BGR)
+            else:
+                pil_image = Image.fromarray(image.astype("uint8")).convert("RGB")
+                draw = ImageDraw.Draw(pil_image)
+                draw.rectangle(
+                    (int(x1), int(y1), int(x1 + w), int(y1 + h)),
+                    outline=(255, 0, 0),
+                    width=2,
+                )
+                pil_image.save(save_path, quality=92)
 
         else:
             vis_name = "Tracking" if debug_name == "" else "Tracking" + str(debug_name)
@@ -1038,9 +2951,10 @@ class EnTeRTrack(BaseTracker):
     # ------------------------------------------------------------
     # Box mapping
     # ------------------------------------------------------------
-    def map_box_back(self, pred_box: list, resize_factor: float):
-        cx_prev = self.state[0] + 0.5 * self.state[2]
-        cy_prev = self.state[1] + 0.5 * self.state[3]
+    def map_box_back(self, pred_box: list, resize_factor: float, reference_bbox=None):
+        reference_bbox = self.state if reference_bbox is None else reference_bbox
+        cx_prev = reference_bbox[0] + 0.5 * reference_bbox[2]
+        cy_prev = reference_bbox[1] + 0.5 * reference_bbox[3]
 
         cx, cy, w, h = pred_box
 
@@ -1056,9 +2970,11 @@ class EnTeRTrack(BaseTracker):
             h
         ]
 
-    def map_box_back_batch(self, pred_box: torch.Tensor, resize_factor: float):
-        cx_prev = self.state[0] + 0.5 * self.state[2]
-        cy_prev = self.state[1] + 0.5 * self.state[3]
+    def map_box_back_batch(self, pred_box: torch.Tensor, resize_factor: float,
+                           reference_bbox=None):
+        reference_bbox = self.state if reference_bbox is None else reference_bbox
+        cx_prev = reference_bbox[0] + 0.5 * reference_bbox[2]
+        cy_prev = reference_bbox[1] + 0.5 * reference_bbox[3]
 
         cx, cy, w, h = pred_box.unbind(-1)
 

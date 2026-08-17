@@ -3,11 +3,19 @@ import multiprocessing
 import os
 import sys
 import csv
+import json
+import gzip
 from itertools import product
 from collections import OrderedDict
 from lib.test.evaluation import Sequence, Tracker
 from lib.test.utils.pcum_diagnostics import DIAGNOSTIC_COLUMNS, diagnostic_filename
+from lib.test.tracker.motion_state import (
+    motion_diagnostics_file,
+    save_motion_diagnostics,
+)
+from lib.test.tracker.mcr_redetection import save_mcr_diagnostics
 import torch
+from lib.test.utils.c3r_inference import C3R_DIAGNOSTIC_COLUMNS
 
 
 def _save_tracker_output(seq: Sequence, tracker: Tracker, output: dict):
@@ -46,6 +54,22 @@ def _save_tracker_output(seq: Sequence, tracker: Tracker, output: dict):
             writer = csv.DictWriter(fh, fieldnames=DIAGNOSTIC_COLUMNS)
             writer.writeheader()
             writer.writerows(data)
+
+    def save_c3r_diagnostics(file, data):
+        with open(file, 'w', newline='') as fh:
+            writer = csv.DictWriter(
+                fh, fieldnames=C3R_DIAGNOSTIC_COLUMNS, extrasaction='raise')
+            writer.writeheader()
+            writer.writerows(data)
+
+    def save_c3r_instrumentation(file, data):
+        with gzip.open(file, 'wt', encoding='utf-8') as fh:
+            for item in data:
+                rows = item if isinstance(item, list) else [item]
+                for row in rows:
+                    if row:
+                        json.dump(row, fh, sort_keys=True, separators=(',', ':'))
+                        fh.write('\n')
 
     def _convert_dict(input_dict):
         data_dict = {}
@@ -129,6 +153,19 @@ def _save_tracker_output(seq: Sequence, tracker: Tracker, output: dict):
             decision_file = '{}_pcum_decision.txt'.format(base_results_path)
             save_float_matrix(decision_file, data)
 
+        if key == 'pcum_remote_weights':
+            weight_file = '{}_pcum_remote_weights.txt'.format(base_results_path)
+            save_float_matrix(weight_file, data)
+
+        if key == 'pcum_remote_suppression':
+            suppression_file = '{}_pcum_remote_suppression.txt'.format(
+                base_results_path)
+            save_float_matrix(suppression_file, data)
+
+        if key == 'pcum_selector':
+            selector_file = '{}_pcum_selector.txt'.format(base_results_path)
+            save_float_matrix(selector_file, data)
+
         if key == 'pcum_frame_diagnostics':
             uav_id = data[0].get('current_uav', 'unknown')
             diagnostics_file = os.path.join(
@@ -142,6 +179,32 @@ def _save_tracker_output(seq: Sequence, tracker: Tracker, output: dict):
                 ),
             )
             save_frame_diagnostics(diagnostics_file, data)
+
+        if key == 'motion_state_diagnostics':
+            save_motion_diagnostics(tracker.results_dir, seq.name, data)
+
+        if key == 'mcr_diagnostics':
+            save_mcr_diagnostics(tracker.results_dir, seq.name, data)
+
+        if key == 'c3r_diagnostics':
+            diagnostics_file = '{}_c3r_diagnostics.csv'.format(
+                base_results_path)
+            save_c3r_diagnostics(diagnostics_file, data)
+
+        if key == 'c3r_comm_summary':
+            summary_file = '{}_c3r_comm_summary.json'.format(base_results_path)
+            with open(summary_file, 'w') as fh:
+                json.dump(data, fh, indent=2, sort_keys=True)
+
+        if key == 'c3r_source_instrumentation':
+            instrumentation_file = '{}_c3r_source_instrumentation.jsonl.gz'.format(
+                base_results_path)
+            save_c3r_instrumentation(instrumentation_file, data)
+
+        if key == 'c3r_aggregate_instrumentation':
+            instrumentation_file = '{}_c3r_aggregate_instrumentation.jsonl.gz'.format(
+                base_results_path)
+            save_c3r_instrumentation(instrumentation_file, data)
 
         elif key == 'time':
             if isinstance(data[0], dict):
@@ -422,6 +485,33 @@ def run_multi_sequence(seq_a: Sequence, seq_b: Sequence , tracker: Tracker, debu
         _save_tracker_output(seq_b, tracker, output_b)
 
 
+def three_view_triplets(dataset):
+    """Bind Three-MDOT views by target identity, independent of list order."""
+    groups = OrderedDict()
+    for sequence in dataset:
+        try:
+            target, view_text = sequence.name.rsplit('-', 1)
+            view = int(view_text)
+        except (AttributeError, TypeError, ValueError):
+            raise ValueError(
+                "Three-MDOT sequence name must end in -1, -2, or -3: {}".format(
+                    getattr(sequence, 'name', sequence)))
+        if view not in (1, 2, 3):
+            raise ValueError("Unsupported Three-MDOT view: {}".format(sequence.name))
+        views = groups.setdefault(target, {})
+        if view in views:
+            raise ValueError("Duplicate Three-MDOT target/view: {}".format(sequence.name))
+        views[view] = sequence
+
+    incomplete = {
+        target: sorted(views) for target, views in groups.items()
+        if set(views) != {1, 2, 3}
+    }
+    if incomplete:
+        raise ValueError("Incomplete Three-MDOT target groups: {}".format(incomplete))
+    return [(views[1], views[2], views[3]) for views in groups.values()]
+
+
 # Three mdot数据集运行
 def run_mdot_dataset_three(dataset, trackers, debug=False, threads=0, num_gpus=8):
     """Runs a list of trackers on a dataset.
@@ -437,11 +527,7 @@ def run_mdot_dataset_three(dataset, trackers, debug=False, threads=0, num_gpus=8
 
     multiprocessing.set_start_method('spawn', force=True)
 
-    len_data = len(dataset) // 3
-    len_two_data = len_data * 2
-    dataset_A = dataset[:len_data]
-    dataset_B = dataset[len_data:len_two_data]
-    dataset_C = dataset[len_two_data:]
+    seq_triplets = three_view_triplets(dataset)
 
     if threads == 0:
         mode = 'sequential'
@@ -449,11 +535,10 @@ def run_mdot_dataset_three(dataset, trackers, debug=False, threads=0, num_gpus=8
         mode = 'parallel'
 
     if mode == 'sequential':
-        for seq_a, seq_b, seq_c in zip(dataset_A, dataset_B, dataset_C):
+        for seq_a, seq_b, seq_c in seq_triplets:
             for tracker_info in trackers:
                 run_three_multi_sequence(seq_a, seq_b, seq_c, tracker_info, debug=debug)    # 将双机对应的sequence传入
     elif mode == 'parallel':
-        seq_triplets = list(zip(dataset_A, dataset_B, dataset_C))
         param_list = [(seq_a, seq_b, seq_c, tracker_info, debug, num_gpus) 
                       for (seq_a, seq_b, seq_c), tracker_info in product(seq_triplets, trackers)]
         with multiprocessing.Pool(processes=threads) as pool:
@@ -499,10 +584,28 @@ def run_three_multi_sequence(seq_a: Sequence, seq_b: Sequence ,seq_c: Sequence, 
                 tracker._save_pcum_frame_diagnostics = False
         return tracker._save_pcum_frame_diagnostics
 
+    def _motion_state_log_enabled():
+        if not hasattr(tracker, "_save_motion_state_diagnostics"):
+            try:
+                params = tracker.get_parameters()
+                motion_cfg = getattr(params.cfg.TEST, "MOTION_STATE", None)
+                tracker._save_motion_state_diagnostics = bool(
+                    getattr(motion_cfg, "ENABLED", False)
+                    and getattr(motion_cfg, "LOG_ENABLED", False)
+                )
+            except Exception:
+                tracker._save_motion_state_diagnostics = False
+        return tracker._save_motion_state_diagnostics
+
+    def _c3r_instrumentation_enabled():
+        return bool(getattr(tracker, "c3r_instrumentation", False))
+
     def _sequence_results_exist(
         seq,
         need_decision_log=False,
         need_frame_diagnostics=False,
+        need_motion_diagnostics=False,
+        need_c3r_instrumentation=False,
         uav_id="unknown",
     ):
         if seq.object_ids is None:
@@ -526,6 +629,17 @@ def run_three_multi_sequence(seq_a: Sequence, seq_b: Sequence ,seq_c: Sequence, 
                 )
                 if not os.path.isfile(frame_file):
                     return False
+            if need_motion_diagnostics and not os.path.isfile(
+                motion_diagnostics_file(tracker.results_dir, seq.name)
+            ):
+                return False
+            if need_c3r_instrumentation:
+                for suffix in (
+                        "_c3r_source_instrumentation.jsonl.gz",
+                        "_c3r_aggregate_instrumentation.jsonl.gz"):
+                    if not os.path.isfile('{}/{}{}'.format(
+                            tracker.results_dir, seq.name, suffix)):
+                        return False
             return True
 
         bbox_files = [
@@ -552,17 +666,33 @@ def run_three_multi_sequence(seq_a: Sequence, seq_b: Sequence ,seq_c: Sequence, 
             )
             if not os.path.isfile(frame_file):
                 return False
+        if need_motion_diagnostics and not os.path.isfile(
+            motion_diagnostics_file(tracker.results_dir, seq.name)
+        ):
+            return False
+        if need_c3r_instrumentation:
+            for suffix in (
+                    "_c3r_source_instrumentation.jsonl.gz",
+                    "_c3r_aggregate_instrumentation.jsonl.gz"):
+                if not os.path.isfile('{}/{}{}'.format(
+                        tracker.results_dir, seq.name, suffix)):
+                    return False
         return True
 
     def _results_exist_a():
         need_decision_log = _pcum_decision_log_enabled()
         need_frame_diagnostics = _pcum_frame_diagnostics_enabled()
-        if need_decision_log or need_frame_diagnostics:
+        need_motion_diagnostics = _motion_state_log_enabled()
+        need_c3r_instrumentation = _c3r_instrumentation_enabled()
+        if (need_decision_log or need_frame_diagnostics
+                or need_motion_diagnostics or need_c3r_instrumentation):
             return all(
                 _sequence_results_exist(
                     seq,
                     need_decision_log=need_decision_log,
                     need_frame_diagnostics=need_frame_diagnostics,
+                    need_motion_diagnostics=need_motion_diagnostics,
+                    need_c3r_instrumentation=need_c3r_instrumentation,
                     uav_id=uav_id,
                 )
                 for seq, uav_id in ((seq_a, "A"), (seq_b, "B"), (seq_c, "C"))

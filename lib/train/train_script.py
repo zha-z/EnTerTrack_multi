@@ -30,7 +30,27 @@ import importlib
 from ..utils.focal_loss import FocalLoss
 
 
+def use_grouped_multiview_loader(cfg):
+    """Return whether training must preserve synchronized multi-view groups.
+
+    TRAIN.MULTIVIEW.ENABLED is the method-neutral switch used by paired
+    controls. The PCUM flag remains as a compatibility fallback so existing
+    collaborative configurations resolve to the same loader as before.
+    """
+    train_cfg = getattr(cfg, "TRAIN", None)
+    multiview_cfg = getattr(train_cfg, "MULTIVIEW", None)
+    pcum_cfg = getattr(train_cfg, "PCUM", None)
+    return bool(
+        getattr(multiview_cfg, "ENABLED", False)
+        or getattr(pcum_cfg, "USE_REAL_MULTIVIEW", False)
+    )
+
+
 def run(settings):
+    if getattr(settings, "config_name", "") == "fcvc_full":
+        from lib.train.fcvc_pipeline import run as run_fcvc
+        return run_fcvc(settings)
+
     settings.description = "Training script for EnTeRTrack / OSTrack on MDOT / ThreeMDOT"
 
     # ------------------------------------------------------------
@@ -76,7 +96,7 @@ def run(settings):
         loader_train, loader_val = build_dataloaders_mdot(cfg, settings)
 
     elif settings.script_name == "entertrack":
-        if getattr(getattr(cfg.TRAIN, "PCUM", None), "USE_REAL_MULTIVIEW", False):
+        if use_grouped_multiview_loader(cfg):
             loader_train, loader_val = build_dataloaders_threemdot(cfg, settings)
         else:
             # Single-UAV fine-tuning: treat ThreeMDOT views as independent videos.

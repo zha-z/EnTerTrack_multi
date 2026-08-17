@@ -13,6 +13,7 @@ import math
 import torch
 from torch import nn
 import torch.nn.functional as F
+import yaml
 
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -26,14 +27,28 @@ from lib.models.entertrack.pcum import (  # noqa: E402
     PromptAligner,
     PromptConsistencyLoss,
     PromptFusion,
+    RemoteSuppressionGate,
+    RemotePromptAggregator,
     SaliencyTokenSelector,
     build_pcum,
     build_pseudo_remote_prompts,
+    validate_remote_aggregation,
 )
 from lib.config.entertrack.config import cfg  # noqa: E402
 from lib.config.entertrack.config import update_config_from_file  # noqa: E402
 from lib.test.evaluation.tracker import _pcum_motion_reliability  # noqa: E402
 from lib.test.evaluation.tracker import Tracker as EvaluationTracker  # noqa: E402
+from lib.test.tracker.entertrack import (  # noqa: E402
+    EnTeRTrack,
+    deterministic_reliability_selector_decision,
+    validate_reliability_selector,
+)
+from lib.test.tracker.motion_state import (  # noqa: E402
+    MOTION_DIAGNOSTIC_FIELDS,
+    MotionState,
+    MotionStateManager,
+    save_motion_diagnostics,
+)
 from lib.test.evaluation.running import run_three_multi_sequence  # noqa: E402
 from lib.test.evaluation.running import _save_tracker_output  # noqa: E402
 from lib.test.utils.pcum_diagnostics import (  # noqa: E402
@@ -43,8 +58,179 @@ from lib.test.utils.pcum_diagnostics import (  # noqa: E402
     normalized_response_entropy,
     visibility_for_remote_selection,
 )
+from lib.test.utils.pcum_remote_ablation import RemotePromptAblator  # noqa: E402
+from lib.test.utils.pcum_remote_state import (  # noqa: E402
+    build_remote_state,
+    read_gt_visibility,
+    validate_remote_state_source,
+)
 from lib.train.data.sampler_threemdot import TrackingSamplerThreeMDOT  # noqa: E402
 from lib.train.actors.entertrack_threemdot import EnTeRTrackActorThreeMDOT  # noqa: E402
+from lib.train.optimizer_groups import build_optimizer_param_groups  # noqa: E402
+from lib.train.pcum_freeze import (  # noqa: E402
+    apply_pcum_ranking_freeze,
+    assert_pcum_frozen_batchnorm_eval,
+    assert_optimizer_has_only_pcum_params,
+    set_pcum_frozen_modules_eval,
+)
+
+
+class MotionStateShadowTests(unittest.TestCase):
+    def _manager(self, **kwargs):
+        defaults = {
+            "score_low": 0.5,
+            "score_recover": 0.6,
+            "apce_low": 10.0,
+            "apce_recover": 12.0,
+            "motion_residual_high": 2.0,
+            "border_margin": 0.0,
+            "k_lost": 3,
+            "k_normal": 2,
+            "k_recover": 2,
+        }
+        defaults.update(kwargs)
+        manager = MotionStateManager(**defaults)
+        manager.reset([10, 10, 20, 20], image_size=(100, 100))
+        return manager
+
+    def _update(self, manager, frame_id, bbox=None, score=0.8, apce=20.0,
+                response=None):
+        return manager.update_prediction_only(
+            frame_id=frame_id,
+            predicted_bbox=bbox or [10 + frame_id, 10, 20, 20],
+            max_score=score,
+            apce=apce,
+            response=response,
+            image_size=(100, 100),
+        )
+
+    def test_motion_state_defaults_are_disabled(self):
+        self.assertFalse(cfg.TEST.MOTION_STATE.ENABLED)
+        self.assertTrue(cfg.TEST.MOTION_STATE.SHADOW_ONLY)
+        self.assertFalse(cfg.TEST.MOTION_STATE.LOG_ENABLED)
+
+    def test_motion_shadow_validation_config_is_no_gt(self):
+        shadow_cfg = copy.deepcopy(cfg)
+        update_config_from_file(
+            "experiments/entertrack/pcum_v2a_motion_state_shadow_val.yaml",
+            base_cfg=shadow_cfg,
+        )
+        self.assertTrue(shadow_cfg.TEST.MOTION_STATE.ENABLED)
+        self.assertTrue(shadow_cfg.TEST.MOTION_STATE.SHADOW_ONLY)
+        self.assertTrue(shadow_cfg.TEST.MOTION_STATE.LOG_ENABLED)
+        self.assertEqual(shadow_cfg.TEST.PCUM.REMOTE_STATE_SOURCE, "tracker")
+        self.assertFalse(shadow_cfg.TEST.PCUM.USE_REMOTE_VISIBLE_MASK)
+        self.assertEqual(
+            shadow_cfg.MODEL.PCUM.REMOTE_AGGREGATION,
+            "confidence_softmax",
+        )
+        self.assertAlmostEqual(
+            shadow_cfg.MODEL.PCUM.REMOTE_WEIGHT_TEMPERATURE,
+            0.10,
+        )
+
+    def test_shadow_disabled_returns_original_output_object(self):
+        tracker = EnTeRTrack.__new__(EnTeRTrack)
+        tracker.motion_state_manager = None
+        output = {"target_bbox": [1, 2, 3, 4], "score": 0.7}
+        result = tracker._attach_motion_shadow_diagnostics({}, output)
+        self.assertIs(result, output)
+        self.assertEqual(result, {"target_bbox": [1, 2, 3, 4], "score": 0.7})
+
+    def test_shadow_enabled_does_not_change_bbox_or_score(self):
+        tracker = EnTeRTrack.__new__(EnTeRTrack)
+        tracker.motion_state_manager = self._manager()
+        tracker.motion_state_log_enabled = True
+        tracker.frame_id = 1
+        output = {"target_bbox": [11, 10, 20, 20], "score": 0.7}
+        original = copy.deepcopy(output)
+        candidate = {
+            "target_bbox": list(output["target_bbox"]),
+            "max_score": torch.tensor([0.8]),
+            "apce": torch.tensor([20.0]),
+            "response": torch.ones(1, 1, 4, 4),
+            "image": torch.zeros(100, 100, 3).numpy(),
+        }
+        result = tracker._attach_motion_shadow_diagnostics(candidate, output)
+        self.assertEqual(result["target_bbox"], original["target_bbox"])
+        self.assertEqual(result["score"], original["score"])
+        self.assertIn("motion_state_diagnostics", result)
+
+    def test_reset_clears_sequence_state(self):
+        manager = self._manager()
+        for frame_id in range(1, 4):
+            self._update(manager, frame_id, score=0.1, apce=1.0)
+        self.assertEqual(manager.state, MotionState.LOST)
+        manager.reset([30, 30, 10, 10], image_size=(100, 100))
+        self.assertEqual(manager.state, MotionState.NORMAL)
+        self.assertEqual(manager.low_quality_count, 0)
+        self.assertEqual(len(manager.reliable_centers), 1)
+
+    def test_constant_velocity_ema_prediction(self):
+        manager = self._manager(velocity_ema=0.5)
+        self._update(manager, 1, bbox=[12, 10, 20, 20])
+        record = self._update(manager, 2, bbox=[14, 10, 20, 20])
+        self.assertEqual(record["velocity"], [1.0, 0.0])
+        self.assertEqual(record["predicted_motion_center"], [23.0, 20.0])
+
+    def test_k_low_quality_frames_enter_lost(self):
+        manager = self._manager(k_lost=3)
+        for frame_id in range(1, 4):
+            record = self._update(manager, frame_id, score=0.1, apce=1.0)
+        self.assertEqual(record["state"], MotionState.LOST.value)
+
+    def test_recovery_reaches_normal_after_k_frames(self):
+        manager = self._manager(k_lost=2, k_recover=2)
+        self._update(manager, 1, score=0.1, apce=1.0)
+        self._update(manager, 2, score=0.1, apce=1.0)
+        self.assertEqual(manager.state, MotionState.LOST)
+        self._update(manager, 3, score=0.8, apce=20.0)
+        record = self._update(manager, 4, score=0.8, apce=20.0)
+        self.assertEqual(record["state"], MotionState.NORMAL.value)
+
+    def test_single_noise_frame_does_not_oscillate(self):
+        manager = self._manager(k_normal=2)
+        first = self._update(manager, 1, score=0.1, apce=1.0)
+        second = self._update(manager, 2, score=0.8, apce=20.0)
+        third = self._update(manager, 3, score=0.8, apce=20.0)
+        self.assertEqual(first["state"], MotionState.UNCERTAIN.value)
+        self.assertEqual(second["state"], MotionState.UNCERTAIN.value)
+        self.assertEqual(third["state"], MotionState.NORMAL.value)
+
+    def test_missing_response_is_explicitly_unavailable(self):
+        record = self._update(self._manager(), 1, response=None)
+        self.assertIsNone(record["response_entropy"])
+        self.assertIn("response_entropy", record["missing_fields"])
+
+    def test_prediction_only_api_has_no_gt_arguments(self):
+        import inspect
+        parameters = inspect.signature(
+            MotionStateManager.update_prediction_only
+        ).parameters
+        forbidden = {"gt_bbox", "gt_visibility", "target_visible", "oracle_mask"}
+        self.assertTrue(forbidden.isdisjoint(parameters))
+
+    def test_log_fields_and_summary_are_complete(self):
+        manager = self._manager()
+        records = [manager.get_diagnostics(), self._update(manager, 1)]
+        for field in MOTION_DIAGNOSTIC_FIELDS:
+            self.assertIn(field, records[-1])
+        with tempfile.TemporaryDirectory() as results_dir:
+            jsonl_path, summary_path = save_motion_diagnostics(
+                results_dir, "md0001-1", records
+            )
+            self.assertTrue(os.path.isfile(jsonl_path))
+            with open(summary_path) as file_handle:
+                summary = json.load(file_handle)
+            self.assertEqual(summary["sequences"]["md0001-1"]["frame_count"], 2)
+
+    def test_managers_do_not_share_sequence_state(self):
+        first = self._manager(k_lost=2)
+        second = self._manager(k_lost=2)
+        self._update(first, 1, score=0.1, apce=1.0)
+        self._update(first, 2, score=0.1, apce=1.0)
+        self.assertEqual(first.state, MotionState.LOST)
+        self.assertEqual(second.state, MotionState.NORMAL)
 
 
 class FakeThreeMDOTDataset:
@@ -125,6 +311,330 @@ class FakeTrackerInfo:
 def mark_valid(data):
     data["valid"] = True
     return data
+
+
+class RemotePromptAblationTest(unittest.TestCase):
+    def test_default_mode_is_normal(self):
+        self.assertEqual(cfg.TEST.PCUM.REMOTE_ABLATION, "normal")
+        self.assertEqual(cfg.TEST.PCUM.REMOTE_ABLATION_OFFSET, 10)
+
+    def test_normal_does_not_change_prompt(self):
+        prompt = torch.randn(1, 4, 8, dtype=torch.float32)
+        ablator = RemotePromptAblator(mode="normal", offset=10)
+        output = ablator.apply(0, prompt, target_device=prompt.device)
+        self.assertTrue(torch.equal(output, prompt))
+        self.assertEqual(output.shape, prompt.shape)
+        self.assertEqual(output.dtype, prompt.dtype)
+        self.assertEqual(output.device, prompt.device)
+
+    def test_zero_preserves_prompt_metadata_and_remote_count(self):
+        prompts = [
+            torch.randn(1, 4, 8, dtype=torch.float32),
+            torch.randn(1, 4, 8, dtype=torch.float64),
+        ]
+        ablator = RemotePromptAblator(mode="zero", offset=10)
+        outputs = [
+            ablator.apply(index, prompt, target_device=prompt.device)
+            for index, prompt in enumerate(prompts)
+        ]
+        self.assertEqual(len(outputs), len(prompts))
+        for output, prompt in zip(outputs, prompts):
+            self.assertTrue(torch.equal(output, torch.zeros_like(prompt)))
+            self.assertEqual(output.shape, prompt.shape)
+            self.assertEqual(output.dtype, prompt.dtype)
+            self.assertEqual(output.device, prompt.device)
+
+    def test_temporal_shuffle_is_causal_and_per_uav(self):
+        ablator = RemotePromptAblator(mode="temporal_shuffle", offset=10)
+        outputs = []
+        for frame_index in range(1, 13):
+            prompts = [
+                torch.full((1, 2, 3), float(source_index * 100 + frame_index))
+                for source_index in range(3)
+            ]
+            ablator.record(prompts)
+            outputs.append([
+                ablator.apply(source_index, prompts[source_index])
+                for source_index in range(3)
+            ])
+
+        for frame_index in range(10):
+            for source_index in range(3):
+                expected = float(source_index * 100 + 1)
+                self.assertTrue(torch.all(
+                    outputs[frame_index][source_index] == expected
+                ))
+
+        # Frame 11 uses frame 1; frame 12 uses frame 2.
+        for source_index in range(3):
+            self.assertTrue(torch.all(outputs[10][source_index] == source_index * 100 + 1))
+            self.assertTrue(torch.all(outputs[11][source_index] == source_index * 100 + 2))
+
+    def test_temporal_shuffle_reset_clears_history(self):
+        ablator = RemotePromptAblator(mode="temporal_shuffle", offset=10)
+        prompt = torch.ones(1, 2, 3)
+        ablator.record([prompt])
+        self.assertTrue(torch.equal(ablator.apply(0, prompt), prompt))
+
+        ablator.reset()
+        with self.assertRaises(RuntimeError):
+            ablator.apply(0, prompt)
+
+        new_prompt = torch.full((1, 2, 3), 9.0)
+        ablator.record([new_prompt])
+        self.assertTrue(torch.equal(ablator.apply(0, new_prompt), new_prompt))
+
+    def test_invalid_mode_raises(self):
+        with self.assertRaises(ValueError):
+            RemotePromptAblator(mode="invalid")
+
+
+class RemoteStateSourceTest(unittest.TestCase):
+    class VisibilityProbe:
+        def __init__(self, values):
+            self.values = values
+            self.access_count = 0
+
+        @property
+        def target_visible(self):
+            self.access_count += 1
+            return self.values
+
+    def test_default_source_is_tracker(self):
+        self.assertEqual(cfg.TEST.PCUM.REMOTE_STATE_SOURCE, "tracker")
+
+    def test_yaml_without_source_keeps_tracker_default(self):
+        local_cfg = copy.deepcopy(cfg)
+        update_config_from_file(
+            "experiments/entertrack/"
+            "pcum_supervision_e4_safe_m0_lr8e5_ddp6_ep40_ep0015_t2_raw.yaml",
+            base_cfg=local_cfg,
+        )
+        self.assertEqual(local_cfg.TEST.PCUM.REMOTE_STATE_SOURCE, "tracker")
+
+    def test_gt_legacy_yaml_is_explicit(self):
+        local_cfg = copy.deepcopy(cfg)
+        update_config_from_file(
+            "experiments/entertrack/"
+            "pcum_supervision_e4_safe_m0_lr8e5_ddp6_ep40_ep0015_t2_gt_legacy.yaml",
+            base_cfg=local_cfg,
+        )
+        self.assertEqual(local_cfg.TEST.PCUM.REMOTE_STATE_SOURCE, "gt_legacy")
+
+    def test_tracker_without_visible_mask_does_not_read_gt(self):
+        sequences = [self.VisibilityProbe([True, False]) for _ in range(3)]
+        visibility = read_gt_visibility("tracker", False, sequences, 1)
+        self.assertIsNone(visibility)
+        self.assertEqual([seq.access_count for seq in sequences], [0, 0, 0])
+
+    def test_gt_legacy_explicitly_reads_visibility(self):
+        sequences = [
+            self.VisibilityProbe([True, False]),
+            self.VisibilityProbe([True, True]),
+            self.VisibilityProbe([True, False]),
+        ]
+        visibility = read_gt_visibility("gt_legacy", False, sequences, 1)
+        self.assertEqual(visibility, [False, True, False])
+        self.assertEqual([seq.access_count for seq in sequences], [1, 1, 1])
+
+    def test_oracle_mask_explicitly_reads_visibility(self):
+        sequences = [self.VisibilityProbe([True, False]) for _ in range(3)]
+        visibility = read_gt_visibility("tracker", True, sequences, 1)
+        self.assertEqual(visibility, [False, False, False])
+        self.assertEqual([seq.access_count for seq in sequences], [1, 1, 1])
+
+    def test_tracker_state_uses_prediction_only(self):
+        state = build_remote_state(
+            scores=[0.8, 0.4],
+            motion_reliabilities=[0.5, 1.0],
+            source="tracker",
+            device=torch.device("cpu"),
+            use_motion_confidence=True,
+        )
+        self.assertNotIn("visible", state)
+        self.assertAlmostEqual(state["score"].item(), 0.6, places=6)
+        self.assertAlmostEqual(state["confidence"].item(), 0.5, places=6)
+
+        lower_state = build_remote_state(
+            scores=[0.2, 0.1],
+            motion_reliabilities=[0.1, 0.2],
+            source="tracker",
+            device=torch.device("cpu"),
+            use_motion_confidence=True,
+        )
+        self.assertLess(lower_state["confidence"], state["confidence"])
+
+    def test_none_source_returns_none(self):
+        state = build_remote_state(
+            scores=[0.8, 0.4],
+            motion_reliabilities=[0.5, 1.0],
+            source="none",
+            device=torch.device("cpu"),
+        )
+        self.assertIsNone(state)
+
+    def test_invalid_source_raises(self):
+        with self.assertRaises(ValueError):
+            validate_remote_state_source("annotation")
+
+    def test_gt_legacy_matches_previous_state_formula(self):
+        state = build_remote_state(
+            scores=[0.8, 0.4],
+            motion_reliabilities=[0.5, 1.0],
+            source="gt_legacy",
+            device=torch.device("cpu"),
+            use_motion_confidence=False,
+            gt_visibility=[True, False],
+        )
+        self.assertAlmostEqual(state["score"].item(), 0.6, places=6)
+        self.assertAlmostEqual(state["visible"].item(), 0.5, places=6)
+        self.assertAlmostEqual(state["confidence"].item(), 0.4, places=6)
+        self.assertAlmostEqual(state["motion_reliability"].item(), 0.25, places=6)
+
+        prompt = torch.randn(1, 4, 8)
+        output = RemotePromptAblator("normal").apply(0, prompt)
+        self.assertTrue(torch.equal(output, prompt))
+
+
+class RemoteAggregationTest(unittest.TestCase):
+    def setUp(self):
+        torch.manual_seed(17)
+        self.prompts = torch.randn(2, 3, 4, 8)
+
+    def test_default_mode_is_mean(self):
+        self.assertEqual(cfg.MODEL.PCUM.REMOTE_AGGREGATION, "mean")
+
+    def test_mean_matches_legacy_mean_exactly(self):
+        aggregator = RemotePromptAggregator(mode="mean")
+        output = aggregator(self.prompts)
+        legacy = self.prompts.mean(dim=1)
+        self.assertTrue(torch.equal(output["prompt"], legacy))
+
+    def test_confidence_softmax_weights_sum_to_one(self):
+        state = {
+            "per_remote_score": torch.tensor([
+                [0.9, 0.4, 0.2],
+                [0.2, 0.6, 0.8],
+            ]),
+            "per_remote_apce": torch.tensor([
+                [0.8, 0.5, 0.3],
+                [0.3, 0.7, 0.9],
+            ]),
+            "per_remote_valid": torch.ones(2, 3, dtype=torch.bool),
+        }
+        output = RemotePromptAggregator(
+            mode="confidence_softmax", temperature=0.25
+        )(self.prompts, state)
+        self.assertTrue(torch.allclose(
+            output["weights"].sum(dim=1), torch.ones(2)
+        ))
+        self.assertTrue(torch.isfinite(output["prompt"]).all())
+
+    def test_invalid_remote_has_zero_weight(self):
+        state = {
+            "per_remote_score": torch.tensor([[0.9, 0.8, 0.7]]).expand(2, -1),
+            "per_remote_valid": torch.tensor([
+                [True, False, True],
+                [False, True, True],
+            ]),
+        }
+        output = RemotePromptAggregator("confidence_softmax")(
+            self.prompts, state
+        )
+        self.assertEqual(float(output["weights"][0, 1]), 0.0)
+        self.assertEqual(float(output["weights"][1, 0]), 0.0)
+
+    def test_all_invalid_falls_back_stably(self):
+        state = {
+            "per_remote_score": torch.tensor([[0.9, 0.8, 0.7]]).expand(2, -1),
+            "per_remote_valid": torch.zeros(2, 3, dtype=torch.bool),
+        }
+        output = RemotePromptAggregator("confidence_softmax")(
+            self.prompts, state
+        )
+        expected = torch.full((2, 3), 1.0 / 3.0)
+        self.assertTrue(torch.allclose(output["weights"], expected))
+        self.assertTrue(bool(output["fallback"].all()))
+        self.assertTrue(torch.isfinite(output["prompt"]).all())
+
+    def test_missing_metrics_use_uniform_fallback(self):
+        state = {"per_remote_valid": torch.ones(2, 3, dtype=torch.bool)}
+        output = RemotePromptAggregator("confidence_sigmoid")(
+            self.prompts, state
+        )
+        self.assertTrue(torch.allclose(
+            output["weights"], torch.full((2, 3), 1.0 / 3.0)
+        ))
+        self.assertTrue(torch.equal(
+            output["quality"], torch.zeros_like(output["quality"])
+        ))
+        self.assertTrue(bool(output["fallback"].all()))
+
+    def test_remote_state_metrics_are_detached(self):
+        score = torch.tensor([[0.8, 0.4, 0.2]], requires_grad=True)
+        state = {
+            "per_remote_score": score.expand(2, -1),
+            "per_remote_valid": torch.ones(2, 3, dtype=torch.bool),
+        }
+        prompts = self.prompts.clone().requires_grad_(True)
+        output = RemotePromptAggregator("confidence_softmax")(prompts, state)
+        output["prompt"].sum().backward()
+        self.assertIsNone(score.grad)
+        self.assertIsNotNone(prompts.grad)
+
+    def test_illegal_mode_raises(self):
+        with self.assertRaises(ValueError):
+            validate_remote_aggregation("oracle")
+        with self.assertRaises(ValueError):
+            RemotePromptAggregator("oracle")
+
+
+class ReliabilitySelectorTest(unittest.TestCase):
+    def test_default_selector_is_none(self):
+        self.assertEqual(cfg.TEST.PCUM.RELIABILITY_SELECTOR, "none")
+        self.assertEqual(cfg.TEST.PCUM.SELECTOR_MARGIN, 0.0)
+        self.assertEqual(cfg.TEST.PCUM.SELECTOR_MOTION_THRESHOLD, 0.0)
+        self.assertTrue(cfg.TEST.PCUM.SELECTOR_DIAGNOSTICS)
+
+    def test_validate_selector_modes(self):
+        self.assertEqual(validate_reliability_selector("none"), "none")
+        self.assertEqual(
+            validate_reliability_selector("deterministic"),
+            "deterministic",
+        )
+        with self.assertRaises(ValueError):
+            validate_reliability_selector("oracle")
+
+    def test_deterministic_selector_accepts_confident_collab(self):
+        decision = deterministic_reliability_selector_decision(
+            local_confidence=0.20,
+            collaborative_confidence=0.27,
+            collaborative_motion_reliability=0.5,
+            margin=0.05,
+            motion_threshold=0.2,
+        )
+        self.assertTrue(decision["use_collaborative"])
+        self.assertAlmostEqual(decision["confidence_delta"], 0.07)
+
+    def test_deterministic_selector_rejects_low_margin(self):
+        decision = deterministic_reliability_selector_decision(
+            local_confidence=0.20,
+            collaborative_confidence=0.23,
+            collaborative_motion_reliability=0.5,
+            margin=0.05,
+            motion_threshold=0.2,
+        )
+        self.assertFalse(decision["use_collaborative"])
+
+    def test_deterministic_selector_rejects_low_motion(self):
+        decision = deterministic_reliability_selector_decision(
+            local_confidence=0.20,
+            collaborative_confidence=0.40,
+            collaborative_motion_reliability=0.1,
+            margin=0.05,
+            motion_threshold=0.2,
+        )
+        self.assertFalse(decision["use_collaborative"])
 
 
 class PCUMShapeTest(unittest.TestCase):
@@ -416,6 +926,440 @@ class PCUMShapeTest(unittest.TestCase):
         self.assertTrue(torch.equal(remote_prompts[1][1], torch.zeros_like(remote_prompts[1][1])))
         self.assertTrue(torch.equal(remote_states["score"], torch.tensor([0.5, 0.5])))
 
+    def test_d0_ranking_defaults_are_disabled(self):
+        self.assertFalse(cfg.TRAIN.PCUM.RANKING_ENABLED)
+        self.assertFalse(cfg.TRAIN.PCUM_RANKING.ENABLED)
+        self.assertFalse(cfg.TRAIN.PCUM_RANKING.FREEZE_BACKBONE)
+        self.assertFalse(cfg.TRAIN.PCUM_RANKING.FREEZE_HEAD)
+        self.assertFalse(cfg.TRAIN.PCUM_RANKING.VISIBLE_ONLY)
+        self.assertAlmostEqual(cfg.TRAIN.PCUM_RANKING.LAMBDA_DELAY, 0.1)
+        self.assertAlmostEqual(cfg.TRAIN.PCUM_RANKING.MARGIN_ZERO, 0.02)
+        self.assertAlmostEqual(cfg.TRAIN.PCUM_RANKING.MARGIN_LOCAL, 0.0)
+        self.assertAlmostEqual(cfg.TRAIN.PCUM_RANKING.SAFE_MARGIN, 0.0)
+        self.assertAlmostEqual(cfg.TRAIN.PCUM_RANKING.LAMBDA_ZERO, 0.1)
+        self.assertAlmostEqual(cfg.TRAIN.PCUM_RANKING.LAMBDA_LOCAL, 0.05)
+        self.assertAlmostEqual(cfg.TRAIN.PCUM_RANKING.LAMBDA_SAFE, 0.0)
+        self.assertAlmostEqual(cfg.TRAIN.PCUM.RANK_ZERO_MARGIN, 0.02)
+        self.assertAlmostEqual(cfg.TRAIN.PCUM.RANK_DELAY_MARGIN, 0.02)
+        self.assertAlmostEqual(cfg.TRAIN.PCUM.RANK_LOCAL_MARGIN, 0.0)
+        self.assertAlmostEqual(cfg.TRAIN.PCUM.RANK_ZERO_WEIGHT, 0.1)
+        self.assertAlmostEqual(cfg.TRAIN.PCUM.RANK_DELAY_WEIGHT, 0.1)
+        self.assertAlmostEqual(cfg.TRAIN.PCUM.RANK_LOCAL_WEIGHT, 0.05)
+        self.assertEqual(cfg.TRAIN.PCUM.DELAY_BRANCH_MODE, "batch_roll")
+
+    def test_d0_ranking_alias_overrides_legacy_fields(self):
+        local_cfg = copy.deepcopy(cfg)
+        local_cfg.TRAIN.PCUM.RANKING_ENABLED = False
+        local_cfg.TRAIN.PCUM.RANK_DELAY_WEIGHT = 0.3
+        local_cfg.TRAIN.PCUM_RANKING.ENABLED = True
+        local_cfg.TRAIN.PCUM_RANKING.LAMBDA_DELAY = 0.0
+        actor = EnTeRTrackActorThreeMDOT(
+            net=None,
+            objective={},
+            loss_weight={},
+            settings=edict({"batchsize": self.batch}),
+            cfg=local_cfg,
+        )
+        self.assertTrue(actor._pcum_ranking_enabled())
+        self.assertAlmostEqual(actor._pcum_rank_delay_weight(), 0.0)
+
+    def test_d1_ranking_aliases_override_legacy_fields(self):
+        local_cfg = copy.deepcopy(cfg)
+        local_cfg.TRAIN.PCUM.SAFE_LOSS_WEIGHT = 0.1
+        local_cfg.TRAIN.PCUM.SAFE_MARGIN = 0.0
+        local_cfg.TRAIN.PCUM.RANK_ZERO_WEIGHT = 0.2
+        local_cfg.TRAIN.PCUM.RANK_LOCAL_WEIGHT = 0.05
+        local_cfg.TRAIN.PCUM.RANK_ZERO_MARGIN = 0.02
+        local_cfg.TRAIN.PCUM.RANK_LOCAL_MARGIN = 0.0
+        local_cfg.TRAIN.PCUM_RANKING.LAMBDA_SAFE = 0.3
+        local_cfg.TRAIN.PCUM_RANKING.SAFE_MARGIN = 0.0
+        local_cfg.TRAIN.PCUM_RANKING.LAMBDA_ZERO = 0.05
+        local_cfg.TRAIN.PCUM_RANKING.LAMBDA_LOCAL = 0.05
+        local_cfg.TRAIN.PCUM_RANKING.MARGIN_ZERO = 0.02
+        local_cfg.TRAIN.PCUM_RANKING.MARGIN_LOCAL = 0.0
+        actor = EnTeRTrackActorThreeMDOT(
+            net=None,
+            objective={},
+            loss_weight={},
+            settings=edict({"batchsize": self.batch}),
+            cfg=local_cfg,
+        )
+        self.assertAlmostEqual(actor._pcum_safe_weight(), 0.3)
+        self.assertAlmostEqual(actor._pcum_safe_margin(), 0.0)
+        self.assertAlmostEqual(actor._pcum_rank_zero_weight(), 0.05)
+        self.assertAlmostEqual(actor._pcum_rank_local_weight(), 0.05)
+        self.assertAlmostEqual(actor._pcum_rank_zero_margin(), 0.02)
+        self.assertAlmostEqual(actor._pcum_rank_local_margin(), 0.0)
+
+    def test_d0_ranking_loss_rewards_raw_when_better(self):
+        actor = EnTeRTrackActorThreeMDOT(
+            net=None,
+            objective={},
+            loss_weight={},
+            settings=edict({"batchsize": self.batch}),
+            cfg=copy.deepcopy(cfg),
+        )
+        raw = torch.tensor([0.4, 0.6, 0.5, 0.7, 0.6, 0.8])
+        worse = raw + 0.10
+        better = raw - 0.10
+        loss_good, stats_good = actor.compute_ranking_loss(
+            raw, worse, num_views=3, margin=0.02)
+        loss_bad, stats_bad = actor.compute_ranking_loss(
+            raw, better, num_views=3, margin=0.02)
+        self.assertAlmostEqual(float(loss_good.item()), 0.0, places=6)
+        self.assertGreater(float(loss_bad.item()), 0.0)
+        self.assertEqual(stats_good["raw_better_ratio"], 1.0)
+        self.assertEqual(stats_bad["raw_better_ratio"], 0.0)
+
+    def test_d1_visible_only_mask_flattens_view_major_flags(self):
+        actor = EnTeRTrackActorThreeMDOT(
+            net=None,
+            objective={},
+            loss_weight={},
+            settings=edict({"batchsize": self.batch}),
+            cfg=copy.deepcopy(cfg),
+        )
+        data = {
+            "search_view_valid": torch.tensor([
+                [True, False],
+                [False, True],
+                [True, True],
+            ])
+        }
+        mask = actor._flat_visible_mask(data, num_views=3, device=torch.device("cpu"), total_count=6)
+        expected = torch.tensor([True, False, False, True, True, True])
+        self.assertTrue(torch.equal(mask.cpu(), expected))
+
+    def test_d1_visible_only_ranking_ignores_invisible_samples(self):
+        actor = EnTeRTrackActorThreeMDOT(
+            net=None,
+            objective={},
+            loss_weight={},
+            settings=edict({"batchsize": self.batch}),
+            cfg=copy.deepcopy(cfg),
+        )
+        raw = torch.tensor([0.40, 2.00, 0.40, 2.00, 0.40, 2.00])
+        reference = torch.tensor([0.60, 0.10, 0.60, 0.10, 0.60, 0.10])
+        visible = torch.tensor([True, False, True, False, True, False])
+        visible_loss, visible_stats = actor.compute_ranking_loss(
+            raw, reference, num_views=3, margin=0.02, active_mask=visible)
+        all_loss, all_stats = actor.compute_ranking_loss(
+            raw, reference, num_views=3, margin=0.02)
+        self.assertAlmostEqual(float(visible_loss.item()), 0.0, places=6)
+        self.assertGreater(float(all_loss.item()), 0.0)
+        self.assertEqual(visible_stats["raw_better_ratio"], 1.0)
+        self.assertLess(all_stats["raw_better_ratio"], 1.0)
+
+    def test_d1_safe_loss_reports_visible_active_ratio(self):
+        actor = EnTeRTrackActorThreeMDOT(
+            net=None,
+            objective={},
+            loss_weight={},
+            settings=edict({"batchsize": self.batch}),
+            cfg=copy.deepcopy(cfg),
+        )
+        collab = torch.tensor([0.20, 0.80, 0.20, 0.80, 0.20, 0.80])
+        local = torch.tensor([0.50, 0.10, 0.50, 0.10, 0.50, 0.10])
+        visible = torch.tensor([True, False, True, False, True, False])
+        loss, stats = actor.compute_safe_loss(
+            collab, local, num_views=3, margin=0.0, active_mask=visible)
+        self.assertAlmostEqual(float(loss.item()), 0.0, places=6)
+        self.assertEqual(stats["safe_active_ratio"], 0.0)
+        self.assertEqual(stats["active_count"], 3.0)
+
+    def _make_d2_pcum_pair(self):
+        torch.manual_seed(123)
+        standard = PCUM(
+            token_dim=8,
+            prompt_dim=8,
+            num_prompts=2,
+            topk=4,
+            fusion_mode="gated_add",
+            align_gate="cosine_confidence",
+            enabled=True,
+            fusion_init_scale=0.1,
+            remote_aggregation="confidence_softmax",
+            remote_weight_temperature=0.10,
+            remote_suppression_enabled=False,
+        )
+        d2 = PCUM(
+            token_dim=8,
+            prompt_dim=8,
+            num_prompts=2,
+            topk=4,
+            fusion_mode="gated_add",
+            align_gate="cosine_confidence",
+            enabled=True,
+            fusion_init_scale=0.1,
+            remote_aggregation="confidence_softmax",
+            remote_weight_temperature=0.10,
+            remote_suppression_enabled=True,
+            remote_suppression_gate_init_bias=-4.0,
+        )
+        d2.load_state_dict(standard.state_dict(), strict=False)
+        return standard, d2
+
+    def test_d2_defaults_are_disabled(self):
+        self.assertFalse(cfg.MODEL.PCUM.REMOTE_SUPPRESSION_ENABLED)
+        self.assertAlmostEqual(cfg.MODEL.PCUM.REMOTE_SUPPRESSION_GATE_INIT_BIAS, -4.0)
+        self.assertFalse(cfg.TRAIN.PCUM_RANKING.REMOTE_SUPPRESSION_ONLY)
+        self.assertAlmostEqual(cfg.TRAIN.PCUM_RANKING.LAMBDA_SUPPRESS_BCE, 0.10)
+        self.assertAlmostEqual(cfg.TRAIN.PCUM_RANKING.LAMBDA_SUPPRESS_MEAN, 0.001)
+
+        pcum = PCUM(token_dim=8, enabled=True, remote_suppression_enabled=False)
+        self.assertIsNone(pcum.remote_suppression_gate)
+
+    def test_d2_use_remote_false_matches_original_local_path(self):
+        standard, d2 = self._make_d2_pcum_pair()
+        features = {
+            "search": torch.randn(2, 6, 8),
+            "template": torch.randn(2, 3, 8),
+        }
+        standard_out = standard(features, remote_prompts=None)
+        d2_out = d2(features, remote_prompts=None)
+        self.assertTrue(torch.allclose(
+            standard_out["search_tokens"],
+            d2_out["search_tokens"],
+            atol=1e-6,
+            rtol=1e-6,
+        ))
+        self.assertAlmostEqual(float(d2_out["remote_delta_norm"].item()), 0.0, places=7)
+
+    def test_d2_no_remote_prompt_has_zero_remote_delta(self):
+        _, d2 = self._make_d2_pcum_pair()
+        features = torch.randn(2, 6, 8)
+        out = d2(features, remote_prompts=None)
+        self.assertAlmostEqual(float(out["remote_delta_norm"].item()), 0.0, places=7)
+        self.assertAlmostEqual(float(out["suppressed_delta_norm"].item()), 0.0, places=7)
+
+    def test_d2_initialization_is_close_to_a0_raw(self):
+        _, d2 = self._make_d2_pcum_pair()
+        features = {
+            "search": torch.randn(2, 6, 8),
+            "template": torch.randn(2, 3, 8),
+        }
+        remote_prompts = [
+            torch.randn(2, 2, 8),
+            torch.randn(2, 2, 8),
+        ]
+        remote_states = {
+            "per_remote_valid": torch.ones(2, 2, dtype=torch.bool),
+            "per_remote_score": torch.tensor([[0.9, 0.7], [0.8, 0.6]]),
+        }
+        d2_out = d2(features, remote_prompts=remote_prompts, remote_states=remote_states)
+        a0_out = d2(
+            features,
+            remote_prompts=remote_prompts,
+            remote_states=remote_states,
+            remote_suppression_override=0.0,
+        )
+        suppress = d2_out["remote_suppression"].detach().reshape(-1)
+        self.assertAlmostEqual(float(suppress.mean().item()), float(torch.sigmoid(torch.tensor(-4.0)).item()), places=6)
+        delta_norm = float(d2_out["remote_delta_norm"].item())
+        suppressed_norm = float(d2_out["suppressed_delta_norm"].item())
+        diff_norm = float((d2_out["search_tokens"] - a0_out["search_tokens"]).abs().max().item())
+        self.assertGreater(delta_norm, 0.0)
+        self.assertLess(suppressed_norm, delta_norm * 0.03)
+        self.assertLess(diff_norm, 1e-3)
+
+    def test_d2_optimizer_whitelist_only_remote_suppression_gate(self):
+        local_cfg = copy.deepcopy(cfg)
+        local_cfg.TRAIN.LR = 1e-4
+        local_cfg.TRAIN.PCUM_LR = 8e-5
+        local_cfg.TRAIN.PCUM_RANKING.FREEZE_BACKBONE = True
+        local_cfg.TRAIN.PCUM_RANKING.FREEZE_HEAD = True
+        local_cfg.TRAIN.PCUM_RANKING.REMOTE_SUPPRESSION_ONLY = True
+
+        class TinyNet(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.backbone = nn.Linear(2, 2)
+                self.box_head = nn.Linear(2, 2)
+                self.pcum = nn.Module()
+                self.pcum.encoder = nn.Linear(2, 2)
+                self.pcum.aligner = nn.Linear(2, 2)
+                self.pcum.fusion = nn.Linear(2, 2)
+                self.pcum.remote_suppression_gate = RemoteSuppressionGate(2)
+
+        net = TinyNet()
+        summary = apply_pcum_ranking_freeze(net, local_cfg)
+        self.assertGreater(summary["counts"]["pcum_trainable"], 0)
+        self.assertTrue(all(
+            name.startswith("pcum.remote_suppression_gate.")
+            for name in summary["trainable_names"]
+        ))
+        self.assertFalse(net.pcum.encoder.weight.requires_grad)
+        self.assertFalse(net.pcum.aligner.weight.requires_grad)
+        self.assertFalse(net.pcum.fusion.weight.requires_grad)
+        self.assertTrue(net.pcum.remote_suppression_gate.bias.requires_grad)
+        groups = build_optimizer_param_groups(net, local_cfg)
+        trainable_names = [
+            name for name, parameter in net.named_parameters()
+            if parameter.requires_grad
+        ]
+        self.assertEqual({group["group_name"] for group in groups}, {"pcum"})
+        self.assertTrue(all(
+            name.startswith("pcum.remote_suppression_gate.")
+            for name in trainable_names
+        ))
+        assert_optimizer_has_only_pcum_params(net, local_cfg)
+
+    def test_d2_rank_zero_reference_is_detached(self):
+        actor = EnTeRTrackActorThreeMDOT(
+            net=None,
+            objective={},
+            loss_weight={},
+            settings=edict({"batchsize": self.batch}),
+            cfg=copy.deepcopy(cfg),
+        )
+        raw = torch.tensor([0.6, 0.7, 0.6, 0.7, 0.6, 0.7], requires_grad=True)
+        zero = torch.tensor([0.5, 0.6, 0.5, 0.6, 0.5, 0.6], requires_grad=True)
+        loss, _ = actor.compute_ranking_loss(
+            raw,
+            zero,
+            num_views=3,
+            margin=0.02,
+            detach_reference=True,
+        )
+        loss.backward()
+        self.assertIsNotNone(raw.grad)
+        self.assertIsNone(zero.grad)
+
+    def test_d2_frozen_branch_has_no_gradients(self):
+        _, d2 = self._make_d2_pcum_pair()
+        for name, parameter in d2.named_parameters():
+            parameter.requires_grad = name.startswith("remote_suppression_gate.")
+        features = {
+            "search": torch.randn(2, 6, 8),
+            "template": torch.randn(2, 3, 8),
+        }
+        remote_prompts = [torch.randn(2, 2, 8), torch.randn(2, 2, 8)]
+        out = d2(features, remote_prompts=remote_prompts)
+        out["search_tokens"].sum().backward()
+        gate_grads = []
+        frozen_grad_present = False
+        for name, parameter in d2.named_parameters():
+            if name.startswith("remote_suppression_gate."):
+                gate_grads.append(parameter.grad)
+            elif parameter.grad is not None:
+                frozen_grad_present = True
+        self.assertTrue(any(grad is not None and grad.abs().sum() > 0 for grad in gate_grads))
+        self.assertFalse(frozen_grad_present)
+
+    def test_d2_smoke_yaml_uses_no_gt_inference(self):
+        path = os.path.join(
+            ROOT,
+            "experiments/entertrack/pcum_v2_d2_g0_remote_suppression_rank_softmax_t010_smoke.yaml",
+        )
+        with open(path, "r", encoding="utf-8") as handle:
+            config = yaml.safe_load(handle)
+        self.assertTrue(config["MODEL"]["PCUM"]["REMOTE_SUPPRESSION_ENABLED"])
+        self.assertTrue(config["TRAIN"]["PCUM_RANKING"]["REMOTE_SUPPRESSION_ONLY"])
+        self.assertTrue(config["TRAIN"]["PCUM_RANKING"]["VISIBLE_ONLY"])
+        self.assertFalse(config["TEST"]["PCUM"]["USE_REMOTE_VISIBLE_MASK"])
+        self.assertEqual(config["TEST"]["PCUM"]["REMOTE_STATE_SOURCE"], "tracker")
+
+    def test_d0_zero_and_delay_prompts_preserve_shape(self):
+        actor = EnTeRTrackActorThreeMDOT(
+            net=None,
+            objective={},
+            loss_weight={},
+            settings=edict({"batchsize": self.batch}),
+            cfg=copy.deepcopy(cfg),
+        )
+        remote_prompts = [
+            torch.randn(2, 4, 8),
+            torch.randn(2, 4, 8),
+        ]
+        zero_prompts = actor._make_zero_remote_prompts(remote_prompts)
+        self.assertEqual(len(zero_prompts), len(remote_prompts))
+        for zero, prompt in zip(zero_prompts, remote_prompts):
+            self.assertTrue(torch.equal(zero, torch.zeros_like(prompt)))
+            self.assertEqual(zero.shape, prompt.shape)
+            self.assertEqual(zero.dtype, prompt.dtype)
+            self.assertEqual(zero.device, prompt.device)
+
+        delayed = actor._make_delay_remote_bank(remote_prompts)
+        for delayed_prompt, prompt in zip(delayed, remote_prompts):
+            self.assertEqual(delayed_prompt.shape, prompt.shape)
+            self.assertTrue(torch.equal(delayed_prompt[0], prompt[1]))
+            self.assertTrue(torch.equal(delayed_prompt[1], prompt[0]))
+
+    def test_optimizer_groups_keep_pcum_separate_after_freeze(self):
+        local_cfg = copy.deepcopy(cfg)
+        local_cfg.TRAIN.LR = 1e-4
+        local_cfg.TRAIN.BACKBONE_MULTIPLIER = 0.0
+        local_cfg.TRAIN.PCUM_LR = 8e-5
+
+        class TinyNet(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.backbone = nn.Linear(2, 2)
+                self.box_head = nn.Linear(2, 2)
+                self.pcum = nn.Linear(2, 2)
+
+        net = TinyNet()
+        for name, parameter in net.named_parameters():
+            if name.startswith("backbone."):
+                parameter.requires_grad = False
+        groups = build_optimizer_param_groups(net, local_cfg)
+        group_names = {group["group_name"] for group in groups}
+        self.assertIn("pcum", group_names)
+        self.assertIn("head_and_other", group_names)
+        self.assertNotIn("backbone", group_names)
+
+    def test_strict_pcum_ranking_freeze_excludes_head_and_backbone(self):
+        local_cfg = copy.deepcopy(cfg)
+        local_cfg.TRAIN.LR = 1e-4
+        local_cfg.TRAIN.PCUM_LR = 8e-5
+        local_cfg.TRAIN.PCUM_RANKING.FREEZE_BACKBONE = True
+        local_cfg.TRAIN.PCUM_RANKING.FREEZE_HEAD = True
+
+        class TinyNet(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.backbone = nn.Sequential(nn.Linear(2, 2), nn.BatchNorm1d(2))
+                self.box_head = nn.Sequential(nn.Linear(2, 2), nn.BatchNorm1d(2))
+                self.pcum = nn.Sequential(nn.Linear(2, 2), nn.LayerNorm(2))
+
+        net = TinyNet()
+        summary = apply_pcum_ranking_freeze(net, local_cfg)
+        self.assertGreater(summary["counts"]["pcum_trainable"], 0)
+        self.assertTrue(all(name.startswith("pcum.") for name in summary["trainable_names"]))
+        self.assertFalse(net.backbone[0].weight.requires_grad)
+        self.assertFalse(net.box_head[0].weight.requires_grad)
+        self.assertTrue(net.pcum[0].weight.requires_grad)
+        self.assertFalse(net.backbone[1].training)
+        self.assertFalse(net.box_head[1].training)
+        self.assertTrue(net.pcum[1].training)
+
+        groups = build_optimizer_param_groups(net, local_cfg)
+        self.assertEqual({group["group_name"] for group in groups}, {"pcum"})
+        assert_optimizer_has_only_pcum_params(net, local_cfg)
+
+    def test_strict_pcum_ranking_freeze_reapplies_eval_after_train(self):
+        local_cfg = copy.deepcopy(cfg)
+        local_cfg.TRAIN.PCUM_RANKING.FREEZE_BACKBONE = True
+        local_cfg.TRAIN.PCUM_RANKING.FREEZE_HEAD = True
+
+        class TinyNet(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.backbone = nn.Sequential(nn.Linear(2, 2), nn.BatchNorm1d(2))
+                self.box_head = nn.Sequential(nn.Linear(2, 2), nn.BatchNorm1d(2))
+                self.pcum = nn.Sequential(nn.Linear(2, 2), nn.BatchNorm1d(2))
+
+        net = TinyNet()
+        apply_pcum_ranking_freeze(net, local_cfg)
+        net.train()
+        with self.assertRaises(RuntimeError):
+            assert_pcum_frozen_batchnorm_eval(net, local_cfg)
+        set_pcum_frozen_modules_eval(net, local_cfg)
+        assert_pcum_frozen_batchnorm_eval(net, local_cfg)
+        self.assertFalse(net.backbone[1].training)
+        self.assertFalse(net.box_head[1].training)
+        self.assertTrue(net.pcum[1].training)
+
     def test_threemdot_sampler_requires_all_views_visible(self):
         torch.manual_seed(7)
         sampler = TrackingSamplerThreeMDOT(
@@ -437,23 +1381,23 @@ class PCUMShapeTest(unittest.TestCase):
         self.assertTrue(bool(data["template_view_valid"].all()))
         self.assertTrue(bool(data["search_view_valid"].all()))
 
-    def test_pcum_motion_reliability_is_conservative(self):
-        stable_visible = {
+    def test_pcum_motion_reliability_ignores_visibility_annotation(self):
+        stable = {
             "prev_bbox": [100.0, 100.0, 40.0, 40.0],
             "target_bbox": [106.0, 104.0, 42.0, 41.0],
             "max_score": 0.8,
             "apce": 180.0,
             "visible": True,
         }
-        invisible = dict(stable_visible, visible=False)
-        large_jump = dict(stable_visible, target_bbox=[260.0, 260.0, 42.0, 41.0])
+        annotated_invisible = dict(stable, visible=False)
+        large_jump = dict(stable, target_bbox=[260.0, 260.0, 42.0, 41.0])
 
-        stable_score = _pcum_motion_reliability(stable_visible)
-        invisible_score = _pcum_motion_reliability(invisible)
+        stable_score = _pcum_motion_reliability(stable)
+        invisible_score = _pcum_motion_reliability(annotated_invisible)
         jump_score = _pcum_motion_reliability(large_jump)
 
         self.assertGreater(stable_score, 0.1)
-        self.assertEqual(invisible_score, 0.0)
+        self.assertEqual(invisible_score, stable_score)
         self.assertLess(jump_score, stable_score)
 
     def test_pcum_motion_redetect_config_loads(self):

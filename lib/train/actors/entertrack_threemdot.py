@@ -12,6 +12,7 @@ from lib.utils.box_ops import (
 from ...utils.heapmap_utils import generate_heatmap
 from ...utils.ce_utils import generate_mask_cond, adjust_keep_rate, adjust_temperature
 from lib.models.entertrack.pcum import PromptConsistencyLoss, build_pseudo_remote_prompts
+from lib.models.entertrack.c3r import CommunicationPerturbation, gate_ranking_loss
 
 
 class EnTeRTrackActorThreeMDOT(BaseActor):
@@ -55,6 +56,22 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
         self._paired_cuda_device = None
         if self._diagnostics_enabled:
             self._register_fusion_diagnostic_hook()
+        self._c3r_iteration = 0
+        c3r_train = getattr(getattr(cfg, "TRAIN", None), "C3R", None)
+        self._c3r_perturbation = CommunicationPerturbation(
+            enabled=bool(getattr(c3r_train, "PERTURBATIONS_ENABLED", False)),
+            dropout_probability=float(getattr(c3r_train, "REMOTE_DROPOUT_PROB", 0.25)),
+            delays=getattr(c3r_train, "DELAYS", [0, 1, 2, 4]),
+            delay_probabilities=getattr(
+                c3r_train, "DELAY_PROBS", [0.50, 0.20, 0.20, 0.10]),
+            corruption_probability=float(getattr(
+                c3r_train, "SEMANTIC_CORRUPTION_PROB", 0.15)),
+            wrong_remote_probability=float(getattr(
+                c3r_train, "WRONG_REMOTE_PROB", 0.20)),
+            conflict_probability=float(getattr(
+                c3r_train, "ONE_GOOD_ONE_BAD_PROB", 0.15)),
+            seed=int(getattr(c3r_train, "SEED", 20260716)),
+        )
 
     def __call__(self, data):
         """
@@ -70,6 +87,25 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
         out_dict = self.forward_pass(self.net, data)
 
         loss, status = self.compute_losses(out_dict, data)
+
+        if isinstance(out_dict, dict) and isinstance(out_dict.get("c3r", None), dict):
+            diagnostics = out_dict["c3r"]
+            c3r_variant = str(self._get_cfg_value("MODEL.C3R.VARIANT", "c1")).lower()
+            if c3r_variant in ("c0", "a1"):
+                rank_loss = diagnostics["gate_logits"].sum() * 0.0
+            else:
+                rank_loss = gate_ranking_loss(
+                    diagnostics["gate_logits"], diagnostics["gate_labels"])
+            budget_loss = diagnostics["residual_budget_loss"]
+            rank_weight = float(self._get_cfg_value(
+                "TRAIN.C3R.GATE_RANK_WEIGHT", 0.10))
+            budget_weight = float(self._get_cfg_value(
+                "TRAIN.C3R.RESIDUAL_BUDGET_WEIGHT", 0.05))
+            loss = loss + rank_weight * rank_loss + budget_weight * budget_loss
+            status["Loss/c3r_gate_rank"] = float(rank_loss.detach().item())
+            status["Loss/c3r_residual_budget"] = float(budget_loss.detach().item())
+            status["C3R/accepted_packets"] = float(diagnostics["accepted_count"])
+            status["Loss/total"] = float(loss.detach().item())
 
         return loss, status
 
@@ -90,6 +126,73 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
             node = getattr(node, key)
 
         return node
+
+    def _pcum_ranking_enabled(self):
+        return bool(self._get_cfg_value(
+            "TRAIN.PCUM_RANKING.ENABLED",
+            self._get_cfg_value("TRAIN.PCUM.RANKING_ENABLED", False),
+        ))
+
+    def _pcum_rank_delay_weight(self):
+        return float(self._get_cfg_value(
+            "TRAIN.PCUM_RANKING.LAMBDA_DELAY",
+            self._get_cfg_value("TRAIN.PCUM.RANK_DELAY_WEIGHT", 0.1),
+        ))
+
+    def _pcum_visible_only_ranking(self):
+        return bool(self._get_cfg_value("TRAIN.PCUM_RANKING.VISIBLE_ONLY", False))
+
+    def _pcum_remote_suppression_only(self):
+        return bool(self._get_cfg_value(
+            "TRAIN.PCUM_RANKING.REMOTE_SUPPRESSION_ONLY", False))
+
+    def _pcum_suppress_bce_weight(self):
+        return float(self._get_cfg_value(
+            "TRAIN.PCUM_RANKING.LAMBDA_SUPPRESS_BCE", 0.10))
+
+    def _pcum_suppress_mean_weight(self):
+        return float(self._get_cfg_value(
+            "TRAIN.PCUM_RANKING.LAMBDA_SUPPRESS_MEAN", 0.001))
+
+    def _pcum_suppress_label_margin(self):
+        return float(self._get_cfg_value(
+            "TRAIN.PCUM_RANKING.SUPPRESS_LABEL_MARGIN", 0.0))
+
+    def _pcum_rank_zero_margin(self):
+        value = float(self._get_cfg_value("TRAIN.PCUM_RANKING.MARGIN_ZERO", 0.02))
+        if value != 0.02:
+            return value
+        return float(self._get_cfg_value("TRAIN.PCUM.RANK_ZERO_MARGIN", 0.02))
+
+    def _pcum_rank_local_margin(self):
+        value = float(self._get_cfg_value("TRAIN.PCUM_RANKING.MARGIN_LOCAL", 0.0))
+        if value != 0.0:
+            return value
+        return float(self._get_cfg_value("TRAIN.PCUM.RANK_LOCAL_MARGIN", 0.0))
+
+    def _pcum_safe_margin(self):
+        value = float(self._get_cfg_value("TRAIN.PCUM_RANKING.SAFE_MARGIN", 0.0))
+        if value != 0.0:
+            return value
+        return float(self._get_cfg_value("TRAIN.PCUM.SAFE_MARGIN", 0.0))
+
+    def _pcum_rank_zero_weight(self):
+        value = float(self._get_cfg_value("TRAIN.PCUM_RANKING.LAMBDA_ZERO", 0.1))
+        if value != 0.1:
+            return value
+        return float(self._get_cfg_value("TRAIN.PCUM.RANK_ZERO_WEIGHT", 0.1))
+
+    def _pcum_rank_local_weight(self):
+        value = float(self._get_cfg_value("TRAIN.PCUM_RANKING.LAMBDA_LOCAL", 0.05))
+        if value != 0.05:
+            return value
+        return float(self._get_cfg_value("TRAIN.PCUM.RANK_LOCAL_WEIGHT", 0.05))
+
+    def _pcum_safe_weight(self):
+        value = float(self._get_cfg_value("TRAIN.PCUM_RANKING.LAMBDA_SAFE", 0.0))
+        if value != 0.0:
+            return value
+        return float(self._get_cfg_value("TRAIN.PCUM.SAFE_LOSS_WEIGHT", 0.0))
 
     def _unwrap_network(self):
         return self.net.module if hasattr(self.net, "module") else self.net
@@ -154,7 +257,7 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
             self._paired_cuda_device = parameter.device
             self._paired_cuda_rng_state = torch.cuda.get_rng_state(parameter.device)
 
-    def _restore_paired_forward_rng(self):
+    def _restore_paired_forward_rng(self, clear=True):
         if self._paired_cpu_rng_state is not None:
             torch.set_rng_state(self._paired_cpu_rng_state)
         if self._paired_cuda_rng_state is not None:
@@ -162,9 +265,10 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
                 self._paired_cuda_rng_state,
                 device=self._paired_cuda_device,
             )
-        self._paired_cpu_rng_state = None
-        self._paired_cuda_rng_state = None
-        self._paired_cuda_device = None
+        if clear:
+            self._paired_cpu_rng_state = None
+            self._paired_cuda_rng_state = None
+            self._paired_cuda_device = None
 
     def _set_diagnostic_stage(self, stage):
         self._diagnostic_stage = stage if self._diagnostic_active else None
@@ -193,7 +297,16 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
             "Grad/pcum_encoder": _grad_norm("pcum.encoder."),
             "Grad/pcum_aligner": _grad_norm("pcum.aligner."),
             "Grad/pcum_fusion_film": _grad_norm("pcum.fusion.film."),
+            "Grad/remote_suppression_gate": _grad_norm(
+                "pcum.remote_suppression_gate."),
         })
+        frozen_grad_present = False
+        for name, parameter in named_parameters:
+            if not name.startswith("pcum.remote_suppression_gate.") and parameter.grad is not None:
+                if float(parameter.grad.detach().float().abs().max().item()) > 0.0:
+                    frozen_grad_present = True
+                    break
+        values["Grad/frozen_parameter_present"] = float(frozen_grad_present)
         if fusion is not None:
             raw_scale = fusion.residual_scale.detach().float().item()
             effective_scale = fusion._residual_scale().detach().float().item()
@@ -301,7 +414,8 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
             mask = mask.unsqueeze(-1)
         return prompt * mask
 
-    def _make_remote_state(self, masks, device=None, dtype=None):
+    def _make_remote_state(self, masks, device=None, dtype=None,
+                           metric_states=None):
         masks = [m for m in masks if m is not None]
         if len(masks) == 0:
             return None
@@ -310,7 +424,68 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
             m.to(device=device, dtype=dtype or torch.float32).view(-1)
             for m in masks
         ], dim=0)
-        return {"score": stacked.mean(dim=0)}
+        state = {
+            "score": stacked.mean(dim=0),
+            "per_remote_valid": (stacked.transpose(0, 1) > 0).detach(),
+        }
+        if metric_states is None:
+            return state
+        if len(metric_states) != len(masks):
+            raise ValueError("Remote metric states must align with prompt masks")
+
+        metric_keys = (
+            "score",
+            "apce",
+            "bbox_score",
+            "motion_reliability",
+        )
+        for key in metric_keys:
+            values = []
+            any_available = False
+            for slot, mask in zip(metric_states, masks):
+                value = None if slot is None else slot.get(key, None)
+                if value is None:
+                    value = torch.full_like(
+                        mask.to(device=device, dtype=dtype or torch.float32),
+                        float("nan"),
+                    )
+                else:
+                    any_available = True
+                    value = value.detach().to(
+                        device=device, dtype=dtype or torch.float32
+                    ).reshape(-1)
+                values.append(value)
+            if any_available:
+                state["per_remote_{}".format(key)] = torch.stack(
+                    values, dim=1
+                ).detach()
+        return state
+
+    def _predicted_remote_state_bank(self, pred_dict, num_views):
+        """Build detached no-GT reliability from local warm predictions."""
+        score_map = pred_dict.get("score_map", None)
+        if not torch.is_tensor(score_map) or score_map.shape[0] % num_views != 0:
+            return None
+        response = score_map.detach().float().reshape(score_map.shape[0], -1)
+        maximum = response.max(dim=1).values
+        score = maximum.clamp(0.0, 1.0)
+        minimum = response.min(dim=1).values
+        denominator = ((response - minimum[:, None]) ** 2).mean(dim=1)
+        apce = ((maximum - minimum) ** 2) / denominator.clamp_min(1e-8)
+        apce_norm = max(float(self._get_cfg_value(
+            "TEST.PCUM.MOTION_REDETECT_APCE_NORM", 200.0)), 1e-6)
+        apce = (apce / apce_norm).clamp(0.0, 1.0)
+
+        batch_size = score.shape[0] // num_views
+        states = []
+        for view_index in range(num_views):
+            start = view_index * batch_size
+            end = (view_index + 1) * batch_size
+            states.append({
+                "score": score[start:end].detach(),
+                "apce": apce[start:end].detach(),
+            })
+        return states
 
     def _real_multiview_loss_weights(self, num_views, device):
         weights = self._get_cfg_value("TRAIN.PCUM.REAL_MULTIVIEW_LOSS_WEIGHTS", [])
@@ -335,6 +510,22 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
         return (
             self._get_cfg_value("MODEL.PCUM.ENABLED", False)
             and self._get_cfg_value("TRAIN.PCUM.USE_REAL_MULTIVIEW", False)
+            and self._num_views(data) >= 3
+        )
+
+    def _use_c3r(self, data):
+        return (
+            self._get_cfg_value("MODEL.C3R.ENABLED", False)
+            and self._get_cfg_value("TRAIN.C3R.ENABLED", False)
+            and self._num_views(data) >= 3
+        )
+
+    def _use_flat_multiview_baseline(self, data):
+        return (
+            self._get_cfg_value("TRAIN.PARTIAL_ADAPTATION.ENABLED", False)
+            and self._get_cfg_value(
+                "TRAIN.PARTIAL_ADAPTATION.FLAT_MULTIVIEW_BASELINE", False)
+            and not self._get_cfg_value("MODEL.PCUM.ENABLED", False)
             and self._num_views(data) >= 3
         )
 
@@ -532,8 +723,17 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
         """
         单机 forward：只取第 0 个视角。
         """
+        if self._use_c3r(data):
+            return self.forward_pass_c3r(net, data)
         if self._use_real_multiview_pcum(data):
             return self.forward_pass_real_multiview_pcum(net, data)
+        if self._use_flat_multiview_baseline(data):
+            num_views = min(self._num_views(data), 3)
+            return self._mark_flat_multiview(
+                self._forward_flat_views(
+                    net, data, num_views, remote_prompts=None),
+                num_views,
+            )
 
         template_img = self._select_first_view(data["template_images"])
         search_img = self._select_first_view(data["search_images"])
@@ -600,7 +800,7 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
         return out_dict
 
     def _forward_one_view(self, net, data, view_index=0, remote_prompts=None,
-                          remote_states=None):
+                          remote_states=None, remote_suppression_override=None):
         template_img = self._select_view(data["template_images"], view_index)
         search_img = self._select_view(data["search_images"], view_index)
         template_anno = self._select_view(data["template_anno"], view_index)
@@ -656,11 +856,13 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
             prompt_map=prompt_map,
             prompt_gate_input=prompt_gate_input,
             remote_prompts=remote_prompts,
-            remote_states=remote_states
+            remote_states=remote_states,
+            remote_suppression_override=remote_suppression_override,
         )
 
     def _forward_flat_views(self, net, data, num_views, remote_prompts=None,
-                            remote_states=None):
+                            remote_states=None, remote_suppression_override=None,
+                            model_training=True):
         template_img = self._flatten_views(data["template_images"], num_views)
         search_img = self._flatten_views(data["search_images"], num_views)
         template_anno = self._flatten_views(data["template_anno"], num_views)
@@ -712,12 +914,121 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
             temperature=temperature,
             return_last_attn=False,
             return_atp=True,
-            training=True,
+            training=bool(model_training),
             prompt_map=prompt_map,
             prompt_gate_input=prompt_gate_input,
             remote_prompts=remote_prompts,
-            remote_states=remote_states
+            remote_states=remote_states,
+            remote_suppression_override=remote_suppression_override,
         )
+
+    def forward_pass_c3r(self, net, data):
+        """One frozen local forward, then C3R-only per-receiver head reruns."""
+        target = net.module if hasattr(net, "module") else net
+        if getattr(target, "c3r", None) is None:
+            raise RuntimeError("C3R actor path requires model.c3r")
+        num_views = min(self._num_views(data), 3)
+        if num_views != 3:
+            raise ValueError("C3R training requires exactly three synchronized views")
+        with torch.no_grad():
+            local_output = self._forward_flat_views(
+                net, data, num_views, remote_prompts=None, model_training=False)
+        feature = local_output["backbone_feat"].detach()
+        search_tokens = feature[:, -target.feat_len_s:]
+        total_batch = search_tokens.shape[0]
+        if total_batch % num_views != 0:
+            raise ValueError("Flattened C3R batch is not divisible by three views")
+        batch_size = total_batch // num_views
+        self._c3r_iteration += 1
+        frame_id = self._c3r_iteration + 4
+        frame_interval_ms = 33
+        sender_ids = [index // batch_size for index in range(total_batch)]
+        sequence_hashes = [
+            ((self._c3r_iteration * 2654435761) + (index % batch_size)) & 0xFFFFFFFF
+            for index in range(total_batch)
+        ]
+        frame_ids = [frame_id] * total_batch
+        timestamps = [frame_id * frame_interval_ms] * total_batch
+        messages = target.c3r.encoder(
+            search_tokens=search_tokens,
+            response=local_output["score_map"].detach(),
+            bbox=local_output["pred_boxes"].detach(),
+            previous_bbox=None,
+            sender_ids=sender_ids,
+            sequence_hashes=sequence_hashes,
+            frame_ids=frame_ids,
+            timestamp_ms=timestamps,
+        )
+
+        sample_outputs = []
+        gate_logits = []
+        gate_labels = []
+        budget_losses = []
+        accepted_count = 0
+        for flat_index in range(total_batch):
+            receiver_view = flat_index // batch_size
+            sample_index = flat_index % batch_size
+            remote_indices = [
+                view * batch_size + sample_index
+                for view in range(num_views) if view != receiver_view
+            ]
+            remotes = [messages[index] for index in remote_indices]
+            wrong_pool = None
+            if batch_size > 1:
+                wrong_sample = (sample_index + 1) % batch_size
+                wrong_pool = [
+                    messages[view * batch_size + wrong_sample]
+                    for view in range(num_views) if view != receiver_view
+                ]
+            remotes = self._c3r_perturbation.apply(
+                remotes, frame_interval_ms=frame_interval_ms,
+                wrong_pool=wrong_pool)
+            collaboration = target.c3r.collaborate(
+                local_tokens=search_tokens[flat_index:flat_index + 1],
+                local_response=local_output["score_map"][flat_index:flat_index + 1],
+                packets=remotes,
+                receiver_id=receiver_view,
+                sequence_hash=sequence_hashes[flat_index],
+                local_frame_id=frame_id,
+                local_timestamp_ms=frame_id * frame_interval_ms,
+                frame_interval_ms=frame_interval_ms,
+                last_frame_by_sender={},
+            )
+            if collaboration["used_remote"]:
+                fused_feature = torch.cat((
+                    feature[flat_index:flat_index + 1, :-target.feat_len_s],
+                    collaboration["search_tokens"],
+                ), dim=1)
+                sample_output = target.forward_head(fused_feature, None)
+            else:
+                sample_output = {
+                    key: value[flat_index:flat_index + 1]
+                    for key, value in local_output.items()
+                    if key in ("pred_boxes", "score_map", "size_map", "offset_map")
+                }
+            sample_outputs.append(sample_output)
+            accepted_count += int(collaboration["accepted_count"])
+            gate_logits.append(collaboration["gate_logits"])
+            gate_labels.append(collaboration["gate_labels"])
+            budget_losses.append(collaboration["residual_budget_loss"])
+
+        collaborative_output = dict(local_output)
+        for key in ("pred_boxes", "score_map", "size_map", "offset_map"):
+            collaborative_output[key] = torch.cat(
+                [sample[key] for sample in sample_outputs], dim=0)
+        nonempty_logits = [value for value in gate_logits if value.numel()]
+        nonempty_labels = [value for value in gate_labels if value.numel()]
+        zero = search_tokens.sum() * 0.0
+        collaborative_output["c3r"] = {
+            "gate_logits": torch.cat(nonempty_logits) if nonempty_logits else zero.reshape(0),
+            "gate_labels": torch.cat(nonempty_labels) if nonempty_labels else torch.empty(
+                0, device=search_tokens.device, dtype=torch.long),
+            "residual_budget_loss": torch.stack(budget_losses).mean() if budget_losses else zero,
+            "accepted_count": accepted_count,
+        }
+        collaborative_output["pcum_flat_multiview"] = True
+        collaborative_output["num_views"] = num_views
+        return collaborative_output
 
     def _split_flat_prompts(self, prompt, num_views):
         if prompt is None:
@@ -730,13 +1041,19 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
             for i in range(num_views)
         ]
 
-    def _build_remote_inputs(self, data, remote_bank, target_view, num_views):
+    def _build_remote_inputs(self, data, remote_bank, target_view, num_views,
+                             remote_state_bank=None, disable_dropout=False):
         drop_prob = float(self._get_cfg_value("TRAIN.PCUM.REMOTE_DROPOUT_PROB", 0.0))
-        if drop_prob > 0 and torch.rand((), device=remote_bank[0].device).item() < drop_prob:
+        if (
+            not disable_dropout
+            and drop_prob > 0
+            and torch.rand((), device=remote_bank[0].device).item() < drop_prob
+        ):
             return None, None
 
         remote_prompts = []
         remote_masks = []
+        remote_metric_states = []
         for remote_view in range(num_views):
             if remote_view == target_view:
                 continue
@@ -750,22 +1067,32 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
             )
             remote_prompts.append(self._apply_prompt_mask(remote_prompt, mask))
             remote_masks.append(mask)
+            remote_metric_states.append(
+                None if remote_state_bank is None else remote_state_bank[remote_view]
+            )
 
         remote_states = self._make_remote_state(
             remote_masks,
             device=remote_prompts[0].device if remote_prompts else None,
             dtype=remote_prompts[0].dtype if remote_prompts else None,
+            metric_states=remote_metric_states,
         )
         return remote_prompts, remote_states
 
-    def _build_flat_remote_inputs(self, data, remote_bank, num_views):
+    def _build_flat_remote_inputs(self, data, remote_bank, num_views,
+                                  remote_state_bank=None, disable_dropout=False):
         drop_prob = float(self._get_cfg_value("TRAIN.PCUM.REMOTE_DROPOUT_PROB", 0.0))
-        if drop_prob > 0 and torch.rand((), device=remote_bank[0].device).item() < drop_prob:
+        if (
+            not disable_dropout
+            and drop_prob > 0
+            and torch.rand((), device=remote_bank[0].device).item() < drop_prob
+        ):
             return None, None
 
         num_remote = num_views - 1
         remote_slots = [[] for _ in range(num_remote)]
         mask_slots = [[] for _ in range(num_remote)]
+        metric_slots = [dict() for _ in range(num_remote)]
 
         for target_view in range(num_views):
             remote_views = [view for view in range(num_views) if view != target_view]
@@ -785,13 +1112,26 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
                     )
                 remote_slots[slot].append(self._apply_prompt_mask(remote_prompt, mask))
                 mask_slots[slot].append(mask)
+                if remote_state_bank is not None:
+                    for key, value in remote_state_bank[remote_view].items():
+                        metric_slots[slot].setdefault(key, []).append(value)
 
         remote_prompts = [torch.cat(slot_prompts, dim=0) for slot_prompts in remote_slots]
         remote_masks = [torch.cat(slot_masks, dim=0) for slot_masks in mask_slots]
+        remote_metric_states = None
+        if remote_state_bank is not None:
+            remote_metric_states = [
+                {
+                    key: torch.cat(values, dim=0).detach()
+                    for key, values in slot.items()
+                }
+                for slot in metric_slots
+            ]
         remote_states = self._make_remote_state(
             remote_masks,
             device=remote_prompts[0].device if remote_prompts else None,
             dtype=remote_prompts[0].dtype if remote_prompts else None,
+            metric_states=remote_metric_states,
         )
         return remote_prompts, remote_states
 
@@ -877,10 +1217,16 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
         if pair_denominator <= 0:
             raise ValueError("LOCAL_LOSS_WEIGHT + COLLAB_LOSS_WEIGHT must be positive")
 
-        backward_loss = local_components["tracking"] * (local_weight / pair_denominator)
+        if self._pcum_ranking_enabled():
+            backward_loss = local_components["tracking"] * local_weight
+        else:
+            backward_loss = local_components["tracking"] * (local_weight / pair_denominator)
         cache = {
             "num_views": num_views,
             "remote_bank": [prompt.detach() for prompt in local_prompts],
+            "remote_state_bank": self._predicted_remote_state_bank(
+                local_output, num_views
+            ),
             "local_per_sample": local_per_sample["total"].detach(),
             "local_tracking": local_components["tracking"].detach(),
             "local_status": local_status,
@@ -890,14 +1236,239 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
         }
         return backward_loss, cache
 
-    def paired_collaborative_stage(self, data, cache):
-        """Run collaborative supervision using only detached remote prompts."""
+    def _weighted_flat_tracking_mean(self, per_sample, num_views):
+        num_views = int(num_views)
+        if per_sample.numel() % num_views != 0:
+            raise ValueError("Per-sample losses are not divisible by num_views")
+        batch_size = per_sample.numel() // num_views
+        view_weights = self._real_multiview_loss_weights(num_views, per_sample.device)
+        loss = per_sample.sum() * 0.0
+        for view_index, view_weight in enumerate(view_weights):
+            start = view_index * batch_size
+            end = (view_index + 1) * batch_size
+            loss = loss + view_weight * per_sample[start:end].mean()
+        return loss
+
+    def _flat_visible_mask(self, data, num_views, device, total_count):
+        visible = data.get("search_view_valid", None)
+        if visible is None:
+            return torch.ones(total_count, device=device, dtype=torch.bool)
+        if isinstance(visible, list):
+            visible = visible[:int(num_views)]
+            if len(visible) == 0:
+                return torch.ones(total_count, device=device, dtype=torch.bool)
+            visible = torch.stack([
+                torch.as_tensor(item).reshape(-1) for item in visible
+            ], dim=0)
+        elif not torch.is_tensor(visible):
+            return torch.ones(total_count, device=device, dtype=torch.bool)
+
+        visible = visible.to(device=device)
+        if visible.dim() >= 3:
+            visible = visible[..., 0]
+        if visible.dim() == 1:
+            visible = visible.view(1, -1).expand(int(num_views), -1)
+        elif visible.dim() >= 2 and visible.shape[0] != int(num_views):
+            if visible.shape[1] == int(num_views):
+                visible = visible.transpose(0, 1)
+        visible = visible[:int(num_views)].contiguous().view(-1).bool()
+        if visible.numel() != int(total_count):
+            return torch.ones(total_count, device=device, dtype=torch.bool)
+        return visible
+
+    def _make_zero_remote_prompts(self, remote_prompts):
+        if remote_prompts is None:
+            return None
+        return [torch.zeros_like(prompt) for prompt in remote_prompts]
+
+    def _make_delay_remote_bank(self, remote_bank):
+        mode = str(self._get_cfg_value(
+            "TRAIN.PCUM.DELAY_BRANCH_MODE", "batch_roll")).lower()
+        if mode != "batch_roll":
+            raise ValueError("Unsupported DELAY_BRANCH_MODE: %s" % mode)
+        delayed = []
+        for prompt in remote_bank:
+            if prompt.shape[0] > 1:
+                delayed.append(torch.roll(prompt, shifts=1, dims=0))
+            else:
+                delayed.append(torch.roll(prompt, shifts=1, dims=1))
+        return delayed
+
+    def _run_paired_remote_branch(self, data, num_views, remote_prompts,
+                                  remote_states, stage_name,
+                                  remote_suppression_override=None):
+        self._set_diagnostic_stage(stage_name)
+        output = self._mark_flat_multiview(
+            self._forward_flat_views(
+                self.net,
+                data,
+                num_views,
+                remote_prompts=remote_prompts,
+                remote_states=remote_states,
+                remote_suppression_override=remote_suppression_override,
+            ),
+            num_views,
+        )
+        per_sample = self._flat_per_sample_tracking_loss(
+            output, data, num_views)["total"]
+        return output, per_sample
+
+    def compute_ranking_loss(self, raw_per_sample, reference_per_sample,
+                             num_views, margin=0.0, active_mask=None,
+                             detach_reference=False):
+        if raw_per_sample.shape != reference_per_sample.shape:
+            raise ValueError("Ranking per-sample losses must match")
+        if detach_reference:
+            reference_per_sample = reference_per_sample.detach()
+        delta = raw_per_sample - reference_per_sample
+        if active_mask is None:
+            active_mask = torch.ones_like(delta, dtype=torch.bool)
+        else:
+            active_mask = active_mask.to(device=delta.device, dtype=torch.bool)
+        num_views = int(num_views)
+        if delta.numel() % num_views != 0:
+            raise ValueError("Per-sample losses are not divisible by num_views")
+        batch_size = delta.numel() // num_views
+        view_weights = self._real_multiview_loss_weights(num_views, delta.device)
+        rank_loss = delta.sum() * 0.0
+        for view_index, view_weight in enumerate(view_weights):
+            start = view_index * batch_size
+            end = (view_index + 1) * batch_size
+            view_mask = active_mask[start:end]
+            if bool(view_mask.any().item()):
+                view_loss = torch.relu(
+                    delta[start:end][view_mask] + float(margin)
+                ).mean()
+                rank_loss = rank_loss + view_weight * view_loss
+
+        active_delta = delta[active_mask]
+        if active_delta.numel() == 0:
+            stats = {
+                "raw_better_ratio": 0.0,
+                "delta_mean": 0.0,
+                "delta_std": 0.0,
+                "delta_min": 0.0,
+                "delta_max": 0.0,
+                "active_count": 0.0,
+            }
+        else:
+            detached_delta = active_delta.detach().float()
+            stats = {
+                "raw_better_ratio": float((detached_delta < 0).float().mean().item()),
+                "delta_mean": float(detached_delta.mean().item()),
+                "delta_std": float(detached_delta.std(unbiased=False).item()),
+                "delta_min": float(detached_delta.min().item()),
+                "delta_max": float(detached_delta.max().item()),
+                "active_count": float(detached_delta.numel()),
+            }
+        return rank_loss, stats
+
+    def compute_remote_suppression_label(self, a0_per_sample, local_per_sample,
+                                         margin=0.0, active_mask=None):
+        if a0_per_sample.shape != local_per_sample.shape:
+            raise ValueError("A0 and local per-sample losses must match")
+        label = (
+            a0_per_sample.detach()
+            > local_per_sample.detach() + float(margin)
+        ).to(dtype=a0_per_sample.dtype)
+        if active_mask is None:
+            return label, torch.ones_like(label, dtype=torch.bool)
+        mask = active_mask.to(device=label.device, dtype=torch.bool)
+        return label, mask
+
+    def _d2_suppression_loss(self, collaborative_output, a0_per_sample,
+                             local_per_sample, active_mask):
+        pcum_out = collaborative_output.get("pcum", {})
+        suppress = pcum_out.get("remote_suppression", None)
+        if not torch.is_tensor(suppress):
+            raise RuntimeError("D2 remote suppression output is missing")
+        suppress = suppress.reshape(-1)
+        label, mask = self.compute_remote_suppression_label(
+            a0_per_sample,
+            local_per_sample,
+            margin=self._pcum_suppress_label_margin(),
+            active_mask=active_mask,
+        )
+        if suppress.numel() != label.numel():
+            raise ValueError("Suppression output and label size mismatch")
+        if bool(mask.any().item()):
+            bce = F.binary_cross_entropy(
+                suppress[mask].clamp(1e-6, 1.0 - 1e-6),
+                label[mask],
+            )
+            suppress_mean_loss = suppress[mask].mean()
+            label_ratio = label[mask].detach().float().mean()
+        else:
+            bce = suppress.sum() * 0.0
+            suppress_mean_loss = suppress.sum() * 0.0
+            label_ratio = torch.zeros((), device=suppress.device)
+
+        detached = suppress.detach().float()
+        if detached.numel():
+            quantiles = torch.quantile(
+                detached.reshape(-1),
+                torch.tensor(
+                    [0.1, 0.5, 0.9],
+                    device=detached.device,
+                    dtype=detached.dtype,
+                ),
+            )
+            suppress_p10, suppress_p50, suppress_p90 = (
+                float(value.item()) for value in quantiles
+            )
+        else:
+            suppress_p10 = suppress_p50 = suppress_p90 = 0.0
+        stats = {
+            "suppress_mean": float(detached.mean().item()) if detached.numel() else 0.0,
+            "suppress_std": float(detached.std(unbiased=False).item()) if detached.numel() else 0.0,
+            "suppress_min": float(detached.min().item()) if detached.numel() else 0.0,
+            "suppress_max": float(detached.max().item()) if detached.numel() else 0.0,
+            "suppress_p10": suppress_p10,
+            "suppress_p50": suppress_p50,
+            "suppress_p90": suppress_p90,
+            "effective_remote_retention": (
+                float((1.0 - detached).mean().item())
+                if detached.numel() else 0.0
+            ),
+            "suppress_label_ratio": float(label_ratio.detach().float().item()),
+            "suppress_active_ratio": float(
+                (detached > 0.5).float().mean().item()) if detached.numel() else 0.0,
+        }
+        for src_key, dst_key in (
+            ("remote_delta_norm", "remote_delta_norm"),
+            ("suppressed_delta_norm", "suppressed_delta_norm"),
+            ("remote_suppression_active_ratio", "remote_suppression_active_ratio"),
+        ):
+            value = pcum_out.get(src_key, None)
+            if torch.is_tensor(value):
+                stats[dst_key] = float(value.detach().float().mean().item())
+        return bce, suppress_mean_loss, stats
+
+    def paired_collaborative_stage_d2(self, data, cache):
+        """D2-G0: train only a suppression gate over frozen local/A0 features."""
         num_views = int(cache["num_views"])
         remote_prompts, remote_states = self._build_flat_remote_inputs(
-            data, cache["remote_bank"], num_views=num_views)
+            data,
+            cache["remote_bank"],
+            num_views=num_views,
+            remote_state_bank=cache.get("remote_state_bank", None),
+        )
         remote_active = remote_prompts is not None
-        self._restore_paired_forward_rng()
 
+        self._restore_paired_forward_rng(clear=False)
+        with torch.no_grad():
+            a0_output, a0_per_sample = self._run_paired_remote_branch(
+                data,
+                num_views,
+                remote_prompts,
+                remote_states,
+                "a0_reference",
+                remote_suppression_override=0.0,
+            )
+            a0_tracking = self._weighted_flat_tracking_mean(
+                a0_per_sample, num_views)
+
+        self._restore_paired_forward_rng(clear=False)
         self._set_diagnostic_stage("collaborative")
         collaborative_output = self._mark_flat_multiview(
             self._forward_flat_views(
@@ -923,30 +1494,80 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
             bool(remote_active),
             dtype=torch.bool,
         )
+        visible_mask = self._flat_visible_mask(
+            data, num_views, collab_per_sample.device, collab_per_sample.numel())
+        loss_active_mask = remote_mask & visible_mask
+
         safe_loss, safe_stats = self.compute_safe_loss(
             collaborative_per_sample=collab_per_sample,
             local_per_sample=cache["local_per_sample"],
             num_views=num_views,
-            margin=float(self._get_cfg_value("TRAIN.PCUM.SAFE_MARGIN", 0.0)),
-            hard_sample_quantile=float(self._get_cfg_value(
-                "TRAIN.PCUM.SAFE_HARD_SAMPLE_QUANTILE", 0.0)),
-            active_mask=remote_mask,
+            margin=self._pcum_safe_margin(),
+            hard_sample_quantile=0.0,
+            active_mask=loss_active_mask,
         )
 
-        collab_factor = cache["collab_weight"] / cache["pair_denominator"]
-        safe_weight = float(self._get_cfg_value("TRAIN.PCUM.SAFE_LOSS_WEIGHT", 0.0))
+        rank_zero_loss = collab_per_sample.sum() * 0.0
+        rank_zero_stats = None
+        zero_tracking = None
+        if remote_active:
+            zero_prompts = self._make_zero_remote_prompts(remote_prompts)
+            self._restore_paired_forward_rng(clear=False)
+            with torch.no_grad():
+                _, zero_per_sample = self._run_paired_remote_branch(
+                    data,
+                    num_views,
+                    zero_prompts,
+                    remote_states,
+                    "zero",
+                    remote_suppression_override=0.0,
+                )
+                zero_tracking = self._weighted_flat_tracking_mean(
+                    zero_per_sample, num_views)
+            rank_zero_loss, rank_zero_stats = self.compute_ranking_loss(
+                collab_per_sample,
+                zero_per_sample,
+                num_views,
+                margin=self._pcum_rank_zero_margin(),
+                active_mask=loss_active_mask,
+                detach_reference=True,
+            )
+
+        suppress_bce, suppress_mean_loss, suppress_stats = (
+            self._d2_suppression_loss(
+                collaborative_output,
+                a0_per_sample,
+                cache["local_per_sample"],
+                loss_active_mask,
+            )
+        )
+
+        self._paired_cpu_rng_state = None
+        self._paired_cuda_rng_state = None
+        self._paired_cuda_device = None
+
+        safe_weight = self._pcum_safe_weight()
+        rank_zero_weight = self._pcum_rank_zero_weight()
+        suppress_bce_weight = self._pcum_suppress_bce_weight()
+        suppress_mean_weight = self._pcum_suppress_mean_weight()
         backward_loss = (
-            collab_components["tracking"] * collab_factor
+            collab_components["tracking"]
             + safe_loss * safe_weight
+            + rank_zero_loss * rank_zero_weight
+            + suppress_bce * suppress_bce_weight
+            + suppress_mean_loss * suppress_mean_weight
             + collab_components["auxiliary"]
         )
         pair_loss = (
             cache["local_weight"] * cache["local_tracking"]
             + cache["collab_weight"] * collab_components["tracking"].detach()
-        ) / cache["pair_denominator"]
+        )
         total_for_log = (
             pair_loss
             + safe_loss.detach() * safe_weight
+            + rank_zero_loss.detach() * rank_zero_weight
+            + suppress_bce.detach() * suppress_bce_weight
+            + suppress_mean_loss.detach() * suppress_mean_weight
             + collab_components["auxiliary"].detach()
         )
 
@@ -955,23 +1576,53 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
             "Loss/total": float(total_for_log.item()),
             "Loss/pair_tracking": float(pair_loss.item()),
             "Loss/local_tracking": float(cache["local_tracking"].item()),
+            "Loss/a0_tracking": float(a0_tracking.detach().item()),
+            "Loss/output_tracking": float(
+                collab_components["tracking"].detach().item()),
             "Loss/collaborative_tracking": float(
                 collab_components["tracking"].detach().item()),
+            "Loss/zero_tracking": 0.0 if zero_tracking is None else float(
+                zero_tracking.detach().item()),
             "Loss/safe": float(safe_loss.detach().item()),
+            "Loss/rank_zero": float(rank_zero_loss.detach().item()),
+            "Loss/remote_suppression_bce": float(suppress_bce.detach().item()),
+            "Loss/remote_suppression_mean": float(suppress_mean_loss.detach().item()),
             "Loss/local_giou": float(local_status["Loss/giou"]),
             "Loss/local_l1": float(local_status["Loss/l1"]),
             "Loss/local_focal": float(local_status["Loss/location"]),
             "Loss/collaborative_giou": float(collab_status["Loss/giou"]),
             "Loss/collaborative_l1": float(collab_status["Loss/l1"]),
             "Loss/collaborative_focal": float(collab_status["Loss/location"]),
-            "PCUM/collaborative_better_ratio": safe_stats["collaborative_better_ratio"],
-            "PCUM/loss_delta_mean": safe_stats["delta_mean"],
-            "PCUM/loss_delta_std": safe_stats["delta_std"],
-            "PCUM/loss_delta_min": safe_stats["delta_min"],
-            "PCUM/loss_delta_max": safe_stats["delta_max"],
+            "PCUM/d2_remote_suppression_only": 1.0,
             "PCUM/remote_active": float(remote_active),
-            "PCUM/remote_dropout": float(not remote_active),
-            "PCUM/safe_margin": float(self._get_cfg_value("TRAIN.PCUM.SAFE_MARGIN", 0.0)),
+            "PCUM/ranking_visible_only": 1.0,
+            "PCUM/visible_ratio": float(visible_mask.float().mean().detach().item()),
+            "PCUM/visible_ranking_sample_count": float(
+                loss_active_mask.float().sum().detach().item()),
+            "PCUM/invisible_sample_count": float(
+                (~visible_mask).float().sum().detach().item()),
+            "PCUM/raw_better_than_zero_visible_ratio": (
+                0.0 if rank_zero_stats is None else rank_zero_stats["raw_better_ratio"]
+            ),
+            "PCUM/raw_better_than_local_visible_ratio": safe_stats[
+                "collaborative_better_ratio"],
+            "PCUM/safe_active_visible_ratio": safe_stats["safe_active_ratio"],
+            "PCUM/suppress_mean": suppress_stats.get("suppress_mean", 0.0),
+            "PCUM/suppress_std": suppress_stats.get("suppress_std", 0.0),
+            "PCUM/suppress_min": suppress_stats.get("suppress_min", 0.0),
+            "PCUM/suppress_max": suppress_stats.get("suppress_max", 0.0),
+            "PCUM/suppress_p10": suppress_stats.get("suppress_p10", 0.0),
+            "PCUM/suppress_p50": suppress_stats.get("suppress_p50", 0.0),
+            "PCUM/suppress_p90": suppress_stats.get("suppress_p90", 0.0),
+            "PCUM/effective_remote_retention": suppress_stats.get(
+                "effective_remote_retention", 0.0),
+            "PCUM/suppress_label_ratio": suppress_stats.get("suppress_label_ratio", 0.0),
+            "PCUM/suppression_active_ratio": suppress_stats.get("suppress_active_ratio", 0.0),
+            "PCUM/remote_delta_norm": suppress_stats.get("remote_delta_norm", 0.0),
+            "PCUM/suppressed_delta_norm": suppress_stats.get("suppressed_delta_norm", 0.0),
+            "PCUM/safe_margin": self._pcum_safe_margin(),
+            "PCUM/rank_zero_margin": self._pcum_rank_zero_margin(),
+            "PCUM/suppress_label_margin": self._pcum_suppress_label_margin(),
             "flops": float(collab_status.get("flops", 0.0)),
             "flops_actual": float(collab_status.get("flops_actual", 0.0)),
             "flops_target": float(collab_status.get("flops_target", self.F_target)),
@@ -985,6 +1636,272 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
         for view_index, view_weight in enumerate(view_weights):
             status["pcum_view_weight_%d" % view_index] = float(
                 view_weight.detach().item())
+
+        pcum_diag = collaborative_output.get("pcum", {}).get(
+            "remote_aggregation_diagnostics", None)
+        if isinstance(pcum_diag, dict):
+            for src_key, dst_key in (
+                ("remote_weight_entropy", "PCUM/remote_weight_entropy"),
+                ("remote_weight_max", "PCUM/remote_weight_max"),
+                ("remote_weight_mean", "PCUM/remote_weight_mean"),
+                ("valid_remote_count", "PCUM/valid_remote_count"),
+                ("remote_quality_mean", "PCUM/remote_quality_mean"),
+                ("remote_quality_min", "PCUM/remote_quality_min"),
+                ("remote_quality_max", "PCUM/remote_quality_max"),
+            ):
+                value = pcum_diag.get(src_key, None)
+                if torch.is_tensor(value):
+                    status[dst_key] = float(value.detach().float().mean().item())
+                elif value is not None:
+                    status[dst_key] = float(value)
+        return backward_loss, status
+
+    def paired_collaborative_stage(self, data, cache):
+        """Run collaborative supervision using only detached remote prompts."""
+        if self._pcum_remote_suppression_only():
+            return self.paired_collaborative_stage_d2(data, cache)
+
+        num_views = int(cache["num_views"])
+        remote_prompts, remote_states = self._build_flat_remote_inputs(
+            data,
+            cache["remote_bank"],
+            num_views=num_views,
+            remote_state_bank=cache.get("remote_state_bank", None),
+        )
+        remote_active = remote_prompts is not None
+        self._restore_paired_forward_rng(clear=False)
+
+        self._set_diagnostic_stage("collaborative")
+        collaborative_output = self._mark_flat_multiview(
+            self._forward_flat_views(
+                self.net,
+                data,
+                num_views,
+                remote_prompts=remote_prompts,
+                remote_states=remote_states,
+            ),
+            num_views,
+        )
+        _, collab_status, collab_components = self.compute_losses(
+            collaborative_output,
+            data,
+            include_auxiliary=True,
+            return_components=True,
+        )
+        collab_per_sample = self._flat_per_sample_tracking_loss(
+            collaborative_output, data, num_views)["total"]
+
+        ranking_enabled = self._pcum_ranking_enabled()
+        remote_mask = torch.full_like(
+            collab_per_sample,
+            bool(remote_active),
+            dtype=torch.bool,
+        )
+        visible_mask = self._flat_visible_mask(
+            data, num_views, collab_per_sample.device, collab_per_sample.numel())
+        visible_only = bool(ranking_enabled and self._pcum_visible_only_ranking())
+        loss_active_mask = remote_mask & visible_mask if visible_only else remote_mask
+        safe_loss, safe_stats = self.compute_safe_loss(
+            collaborative_per_sample=collab_per_sample,
+            local_per_sample=cache["local_per_sample"],
+            num_views=num_views,
+            margin=self._pcum_safe_margin(),
+            hard_sample_quantile=float(self._get_cfg_value(
+                "TRAIN.PCUM.SAFE_HARD_SAMPLE_QUANTILE", 0.0)),
+            active_mask=loss_active_mask,
+        )
+
+        collab_factor = (
+            cache["collab_weight"]
+            if ranking_enabled
+            else cache["collab_weight"] / cache["pair_denominator"]
+        )
+        rank_zero_loss = collab_per_sample.sum() * 0.0
+        rank_delay_loss = collab_per_sample.sum() * 0.0
+        rank_local_loss = collab_per_sample.sum() * 0.0
+        rank_zero_stats = None
+        rank_delay_stats = None
+        rank_local_stats = None
+        zero_tracking = None
+        delay_tracking = None
+
+        if ranking_enabled and remote_active:
+            zero_prompts = self._make_zero_remote_prompts(remote_prompts)
+            self._restore_paired_forward_rng(clear=False)
+            _, zero_per_sample = self._run_paired_remote_branch(
+                data, num_views, zero_prompts, remote_states, "zero")
+            zero_tracking = self._weighted_flat_tracking_mean(
+                zero_per_sample, num_views)
+            delay_bank = self._make_delay_remote_bank(cache["remote_bank"])
+            delay_prompts, delay_states = self._build_flat_remote_inputs(
+                data,
+                delay_bank,
+                num_views=num_views,
+                remote_state_bank=cache.get("remote_state_bank", None),
+                disable_dropout=True,
+            )
+            self._restore_paired_forward_rng(clear=False)
+            _, delay_per_sample = self._run_paired_remote_branch(
+                data, num_views, delay_prompts, delay_states, "delay")
+            delay_tracking = self._weighted_flat_tracking_mean(
+                delay_per_sample, num_views)
+            rank_zero_loss, rank_zero_stats = self.compute_ranking_loss(
+                collab_per_sample,
+                zero_per_sample,
+                num_views,
+                margin=self._pcum_rank_zero_margin(),
+                active_mask=loss_active_mask,
+            )
+            rank_delay_loss, rank_delay_stats = self.compute_ranking_loss(
+                collab_per_sample,
+                delay_per_sample,
+                num_views,
+                margin=float(self._get_cfg_value(
+                    "TRAIN.PCUM.RANK_DELAY_MARGIN", 0.02)),
+                active_mask=loss_active_mask,
+            )
+            rank_local_loss, rank_local_stats = self.compute_ranking_loss(
+                collab_per_sample,
+                cache["local_per_sample"],
+                num_views,
+                margin=self._pcum_rank_local_margin(),
+                active_mask=loss_active_mask,
+            )
+        elif ranking_enabled:
+            rank_local_loss, rank_local_stats = self.compute_ranking_loss(
+                collab_per_sample,
+                cache["local_per_sample"],
+                num_views,
+                margin=self._pcum_rank_local_margin(),
+                active_mask=loss_active_mask,
+            )
+
+        self._paired_cpu_rng_state = None
+        self._paired_cuda_rng_state = None
+        self._paired_cuda_device = None
+
+        rank_zero_weight = self._pcum_rank_zero_weight()
+        rank_delay_weight = self._pcum_rank_delay_weight()
+        rank_local_weight = self._pcum_rank_local_weight()
+        safe_weight = self._pcum_safe_weight()
+        backward_loss = (
+            collab_components["tracking"] * collab_factor
+            + safe_loss * safe_weight
+            + rank_zero_loss * rank_zero_weight
+            + rank_delay_loss * rank_delay_weight
+            + rank_local_loss * rank_local_weight
+            + collab_components["auxiliary"]
+        )
+        if ranking_enabled:
+            pair_loss = (
+                cache["local_weight"] * cache["local_tracking"]
+                + cache["collab_weight"] * collab_components["tracking"].detach()
+            )
+        else:
+            pair_loss = (
+                cache["local_weight"] * cache["local_tracking"]
+                + cache["collab_weight"] * collab_components["tracking"].detach()
+            ) / cache["pair_denominator"]
+        total_for_log = (
+            pair_loss
+            + safe_loss.detach() * safe_weight
+            + rank_zero_loss.detach() * rank_zero_weight
+            + rank_delay_loss.detach() * rank_delay_weight
+            + rank_local_loss.detach() * rank_local_weight
+            + collab_components["auxiliary"].detach()
+        )
+
+        local_status = cache["local_status"]
+        status = {
+            "Loss/total": float(total_for_log.item()),
+            "Loss/pair_tracking": float(pair_loss.item()),
+            "Loss/local_tracking": float(cache["local_tracking"].item()),
+            "Loss/collaborative_tracking": float(
+                collab_components["tracking"].detach().item()),
+            "Loss/zero_tracking": 0.0 if zero_tracking is None else float(
+                zero_tracking.detach().item()),
+            "Loss/delay_tracking": 0.0 if delay_tracking is None else float(
+                delay_tracking.detach().item()),
+            "Loss/safe": float(safe_loss.detach().item()),
+            "Loss/rank_zero": float(rank_zero_loss.detach().item()),
+            "Loss/rank_delay": float(rank_delay_loss.detach().item()),
+            "Loss/rank_local": float(rank_local_loss.detach().item()),
+            "Loss/local_giou": float(local_status["Loss/giou"]),
+            "Loss/local_l1": float(local_status["Loss/l1"]),
+            "Loss/local_focal": float(local_status["Loss/location"]),
+            "Loss/collaborative_giou": float(collab_status["Loss/giou"]),
+            "Loss/collaborative_l1": float(collab_status["Loss/l1"]),
+            "Loss/collaborative_focal": float(collab_status["Loss/location"]),
+            "PCUM/collaborative_better_ratio": safe_stats["collaborative_better_ratio"],
+            "PCUM/raw_better_than_zero_ratio": (
+                0.0 if rank_zero_stats is None else rank_zero_stats["raw_better_ratio"]
+            ),
+            "PCUM/raw_better_than_delay_ratio": (
+                0.0 if rank_delay_stats is None else rank_delay_stats["raw_better_ratio"]
+            ),
+            "PCUM/raw_better_than_local_ratio": (
+                0.0 if rank_local_stats is None else rank_local_stats["raw_better_ratio"]
+            ),
+            "PCUM/loss_delta_mean": safe_stats["delta_mean"],
+            "PCUM/loss_delta_std": safe_stats["delta_std"],
+            "PCUM/loss_delta_min": safe_stats["delta_min"],
+            "PCUM/loss_delta_max": safe_stats["delta_max"],
+            "PCUM/remote_active": float(remote_active),
+            "PCUM/remote_dropout": float(not remote_active),
+            "PCUM/safe_margin": self._pcum_safe_margin(),
+            "PCUM/ranking_enabled": float(ranking_enabled),
+            "PCUM/ranking_visible_only": float(visible_only),
+            "PCUM/visible_ratio": float(visible_mask.float().mean().detach().item()),
+            "PCUM/visible_ranking_sample_count": float(
+                loss_active_mask.float().sum().detach().item()),
+            "PCUM/invisible_sample_count": float(
+                (~visible_mask).float().sum().detach().item()),
+            "Loss/rank_zero_visible": float(rank_zero_loss.detach().item()) if visible_only else 0.0,
+            "Loss/rank_local_visible": float(rank_local_loss.detach().item()) if visible_only else 0.0,
+            "Loss/safe_visible": float(safe_loss.detach().item()) if visible_only else 0.0,
+            "PCUM/raw_better_than_zero_visible_ratio": (
+                0.0 if (not visible_only or rank_zero_stats is None) else rank_zero_stats["raw_better_ratio"]
+            ),
+            "PCUM/raw_better_than_local_visible_ratio": (
+                0.0 if (not visible_only or rank_local_stats is None) else rank_local_stats["raw_better_ratio"]
+            ),
+            "PCUM/safe_active_visible_ratio": (
+                0.0 if not visible_only else safe_stats["safe_active_ratio"]
+            ),
+            "PCUM/rank_zero_margin": self._pcum_rank_zero_margin(),
+            "PCUM/rank_delay_margin": float(self._get_cfg_value(
+                "TRAIN.PCUM.RANK_DELAY_MARGIN", 0.02)),
+            "PCUM/rank_local_margin": self._pcum_rank_local_margin(),
+            "flops": float(collab_status.get("flops", 0.0)),
+            "flops_actual": float(collab_status.get("flops_actual", 0.0)),
+            "flops_target": float(collab_status.get("flops_target", self.F_target)),
+            "flops_weight": float(collab_status.get("flops_weight", self.flops_weight)),
+            "loss_prompt_align": float(collab_status.get("loss_prompt_align", 0.0)),
+            "pcum_real_multiview": 1.0,
+            "pcum_num_views": float(num_views),
+        }
+        view_weights = self._real_multiview_loss_weights(
+            num_views, collab_per_sample.device)
+        for view_index, view_weight in enumerate(view_weights):
+            status["pcum_view_weight_%d" % view_index] = float(
+                view_weight.detach().item())
+        pcum_diag = collaborative_output.get("pcum", {}).get(
+            "remote_aggregation_diagnostics", None)
+        if isinstance(pcum_diag, dict):
+            for src_key, dst_key in (
+                ("remote_weight_entropy", "PCUM/remote_weight_entropy"),
+                ("remote_weight_max", "PCUM/remote_weight_max"),
+                ("remote_weight_mean", "PCUM/remote_weight_mean"),
+                ("valid_remote_count", "PCUM/valid_remote_count"),
+                ("remote_quality_mean", "PCUM/remote_quality_mean"),
+                ("remote_quality_min", "PCUM/remote_quality_min"),
+                ("remote_quality_max", "PCUM/remote_quality_max"),
+            ):
+                value = pcum_diag.get(src_key, None)
+                if torch.is_tensor(value):
+                    status[dst_key] = float(value.detach().float().mean().item())
+                elif value is not None:
+                    status[dst_key] = float(value)
         return backward_loss, status
 
     def _single_view_per_sample_tracking_loss(self, pred_dict, gt_dict, view_index):
@@ -1071,19 +1988,25 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
         if active_delta.numel() == 0:
             stats = {
                 "collaborative_better_ratio": 0.0,
+                "safe_active_ratio": 0.0,
                 "delta_mean": 0.0,
                 "delta_std": 0.0,
                 "delta_min": 0.0,
                 "delta_max": 0.0,
+                "active_count": 0.0,
             }
         else:
             detached_delta = active_delta.detach().float()
             stats = {
                 "collaborative_better_ratio": float((detached_delta < 0).float().mean().item()),
+                "safe_active_ratio": float(
+                    (torch.relu(detached_delta + float(margin)) > 0).float().mean().item()
+                ),
                 "delta_mean": float(detached_delta.mean().item()),
                 "delta_std": float(detached_delta.std(unbiased=False).item()),
                 "delta_min": float(detached_delta.min().item()),
                 "delta_max": float(detached_delta.max().item()),
+                "active_count": float(detached_delta.numel()),
             }
         return safe_loss, stats
 

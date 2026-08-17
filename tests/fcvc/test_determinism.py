@@ -1,0 +1,7 @@
+import unittest
+
+import common
+
+
+class FCVCDeterminismContractTest(unittest.TestCase):
+    test_runtime_signature_has_no_gt_and_is_deterministic = common.legacy_runtime.FCVCRuntimeIntegrationTest.test_no_gt_runtime_signature_and_determinism

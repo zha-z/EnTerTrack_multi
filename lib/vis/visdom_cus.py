@@ -1,6 +1,18 @@
-import visdom
-import visdom.server
-import cv2
+try:
+    import visdom
+    import visdom.server
+except ModuleNotFoundError:
+    class _MissingVisdomModule:
+        class Visdom:
+            def __init__(self, *args, **kwargs):
+                raise ImportError("visdom is required for debug visualization.")
+
+    visdom = _MissingVisdomModule()
+
+try:
+    import cv2
+except ModuleNotFoundError:
+    cv2 = None
 import torch
 import copy
 import numpy as np

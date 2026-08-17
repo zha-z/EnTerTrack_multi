@@ -1,0 +1,15 @@
+BASE_CONFIG: ostrack_deit_tiny_b0_j0_partial_adapt_ep15
+MODEL_ROLE: posthoc_j0_b0_partial_adapt_fold1
+DATA:
+  TRAIN:
+    SPLIT_FILE: /data/zjy/EnTeR-Track-main/output/controlled_baselines/pcum_joint_adaptation/cv_manifests/fold_1_train.txt
+  VAL:
+    DATASETS_NAME: [THREEMDOT]
+    DATASETS_RATIO: [1]
+    SPLIT_FILE: /data/zjy/EnTeR-Track-main/output/controlled_baselines/pcum_joint_adaptation/cv_manifests/fold_1_holdout.txt
+TRAIN:
+  SEED: 42
+  VAL_EPOCH_INTERVAL: 9999
+TEST:
+  SAVE_DIR: output/controlled_baselines/pcum_joint_adaptation/fold_1/j0_train
+  CHECKPOINT_NAME: ostrack_deit_tiny_b0_j0_partial_adapt_ep15_fold1

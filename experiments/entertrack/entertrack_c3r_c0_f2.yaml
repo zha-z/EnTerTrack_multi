@@ -1,0 +1,10 @@
+BASE_CONFIG: entertrack_c3r_c0.yaml
+MODEL_ROLE: c3r_c0_f2_naive_compact
+TRAIN:
+  C3R:
+    SEED: 20260716
+DATA:
+  TRAIN:
+    SPLIT_FILE: lib/train/data_specs/threemdot/c3r_f2_train.txt
+TEST:
+  SAVE_DIR: /data/zjy/EnTeR-Track-main/output/c3r_formal/c0/f2

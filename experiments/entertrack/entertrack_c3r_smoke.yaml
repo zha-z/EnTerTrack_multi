@@ -1,0 +1,17 @@
+BASE_CONFIG: entertrack_c3r_c1.yaml
+MODEL_ROLE: c3r_smoke_only
+FIXED_FINAL_EPOCH: 1
+TRAIN:
+  EPOCH: 1
+  BATCH_SIZE: 1
+  NUM_WORKER: 0
+  MAX_ITERS_PER_EPOCH: 1
+  C3R:
+    SEED: 20260716
+DATA:
+  TRAIN:
+    SAMPLE_PER_EPOCH: 3
+  VAL:
+    SAMPLE_PER_EPOCH: 3
+TEST:
+  SAVE_DIR: /tmp/c3r_smoke_only

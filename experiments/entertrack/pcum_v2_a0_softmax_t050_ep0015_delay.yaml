@@ -1,0 +1,74 @@
+DATA:
+  MAX_SAMPLE_INTERVAL: 200
+  MEAN:
+  - 0.485
+  - 0.456
+  - 0.406
+  SEARCH:
+    CENTER_JITTER: 3
+    FACTOR: 4.0
+    NUMBER: 1
+    SCALE_JITTER: 0.25
+    SIZE: 256
+  STD:
+  - 0.229
+  - 0.224
+  - 0.225
+  TEMPLATE:
+    CENTER_JITTER: 0
+    FACTOR: 2.0
+    NUMBER: 1
+    SCALE_JITTER: 0
+    SIZE: 128
+MODEL:
+  BACKBONE:
+    CE_KEEP_RATIO:
+    - 0.7
+    CE_LOC:
+    - 0
+    CE_TEMPLATE_RANGE: CTR_POINT
+    STRIDE: 16
+    TYPE: vit_tiny_patch16_224_arp
+  EXTRA_MERGER: false
+  HEAD:
+    NUM_CHANNELS: 256
+    TYPE: CENTER
+  PCUM:
+    ALIGN_GATE: cosine_confidence
+    ENABLED: true
+    FUSION: film
+    FUSION_INIT_SCALE: 0.005
+    FUSION_SCALE_MAX: 0.03
+    LOCAL_ONLY: false
+    NUM_PROMPTS: 4
+    PROMPT_DIM: 192
+    SALIENCY_SOURCE: feature_norm
+    TOKEN_DIM: 192
+    TOPK: 16
+    REMOTE_AGGREGATION: confidence_softmax
+    REMOTE_WEIGHT_TEMPERATURE: 0.5
+    REMOTE_WEIGHT_EPS: 1.0e-06
+    REMOTE_WEIGHT_MIN_QUALITY: 0.0
+    REMOTE_WEIGHT_DIAGNOSTICS: true
+  PRETRAIN_FILE: tiny_7_OSTrack_ep0300.pth.tar
+  RETURN_INTER: false
+TEST:
+  CHECKPOINT_NAME: pcum_supervision_e4_safe_m0_lr8e5_ddp6_ep40
+  EPOCH: 15
+  PCUM:
+    KEEP_LOCAL_IF_REMOTE_WORSE: false
+    MIN_REMOTE_PROMPTS: 1
+    REMOTE_ABLATION: temporal_shuffle
+    REMOTE_ABLATION_OFFSET: 10
+    REMOTE_APCE_THR: 0.0
+    REMOTE_SCORE_MAX_DROP: 0.05
+    REMOTE_SCORE_THR: 0.0
+    REMOTE_STATE_SOURCE: tracker
+    USE_REMOTE: true
+    USE_REMOTE_ONLY_WHEN_LOCAL_LOW: false
+    USE_REMOTE_VISIBLE_MASK: false
+  SAVE_DIR: output/pcum_supervision_e4_safe_m0_lr8e5_ddp6_ep40
+  SEARCH_FACTOR: 4.0
+  SEARCH_SIZE: 256
+  TEMPLATE_FACTOR: 2.0
+  TEMPLATE_SIZE: 128

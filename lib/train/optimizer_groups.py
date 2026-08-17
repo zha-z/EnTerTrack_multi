@@ -12,22 +12,57 @@ def build_optimizer_param_groups(net, cfg, verbose=False):
         (name, parameter) for name, parameter in named_trainable
         if canonical_name(name).startswith("pcum.")
     ]
+    c3r_named = [
+        (name, parameter) for name, parameter in named_trainable
+        if canonical_name(name).startswith("c3r.")
+    ]
     backbone_named = [
         (name, parameter) for name, parameter in named_trainable
         if canonical_name(name).startswith("backbone.")
     ]
     other_named = [
         (name, parameter) for name, parameter in named_trainable
-        if not canonical_name(name).startswith(("backbone.", "pcum."))
+        if not canonical_name(name).startswith(("backbone.", "pcum.", "c3r."))
     ]
 
-    group_specs = [
-        ("head_and_other", other_named, cfg.TRAIN.LR * 0.1),
-        ("backbone", backbone_named,
-         cfg.TRAIN.LR * cfg.TRAIN.BACKBONE_MULTIPLIER),
-        ("pcum", pcum_named,
-         getattr(cfg.TRAIN, "PCUM_LR", cfg.TRAIN.LR * 0.1)),
-    ]
+    partial_adaptation = bool(getattr(
+        getattr(cfg.TRAIN, "PARTIAL_ADAPTATION", {}), "ENABLED", False))
+    if partial_adaptation:
+        unexpected_backbone = [
+            name for name, _ in backbone_named
+            if not (
+                any(
+                    canonical_name(name).startswith("backbone.blocks.%d." % int(index))
+                    for index in getattr(cfg.TRAIN.PARTIAL_ADAPTATION, "BACKBONE_BLOCKS", [])
+                )
+                or canonical_name(name).startswith("backbone.norm.")
+            )
+        ]
+        if unexpected_backbone:
+            raise RuntimeError(
+                "Partial adaptation optimizer received unexpected backbone parameters: %s"
+                % ", ".join(unexpected_backbone[:20])
+            )
+        group_specs = [
+            ("last_backbone", backbone_named,
+             getattr(cfg.TRAIN.PARTIAL_ADAPTATION, "BACKBONE_LR", 2.4e-6)),
+            ("head", other_named,
+             getattr(cfg.TRAIN.PARTIAL_ADAPTATION, "HEAD_LR", cfg.TRAIN.LR)),
+            ("pcum", pcum_named,
+             getattr(cfg.TRAIN, "PCUM_LR", cfg.TRAIN.LR * 0.1)),
+            ("c3r", c3r_named,
+             getattr(getattr(cfg.TRAIN, "C3R", {}), "LR", cfg.TRAIN.LR)),
+        ]
+    else:
+        group_specs = [
+            ("head_and_other", other_named, cfg.TRAIN.LR * 0.1),
+            ("backbone", backbone_named,
+             cfg.TRAIN.LR * cfg.TRAIN.BACKBONE_MULTIPLIER),
+            ("pcum", pcum_named,
+             getattr(cfg.TRAIN, "PCUM_LR", cfg.TRAIN.LR * 0.1)),
+            ("c3r", c3r_named,
+             getattr(getattr(cfg.TRAIN, "C3R", {}), "LR", cfg.TRAIN.LR)),
+        ]
     groups = [
         {
             "params": [parameter for _, parameter in named],

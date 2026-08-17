@@ -1,4 +1,12 @@
-import tikzplotlib
+try:
+    import tikzplotlib
+except ModuleNotFoundError:
+    class _TikzPlotlibFallback:
+        @staticmethod
+        def save(*args, **kwargs):
+            return None
+
+    tikzplotlib = _TikzPlotlibFallback()
 import matplotlib
 import matplotlib.pyplot as plt
 import os
@@ -6,6 +14,7 @@ import torch
 import pickle
 import json
 from lib.test.evaluation.environment import env_settings
+from lib.test.evaluation.run_id import format_run_id
 from lib.test.analysis.extract_results import extract_results, fuse_extract_results, three_fuse_extract_results,three_fuse_extract_results_APCE
 
 
@@ -91,8 +100,9 @@ def get_tracker_display_name(tracker):
         if tracker['run_id'] is None:
             disp_name = '{}_{}'.format(tracker['name'], tracker['param'])
         else:
-            disp_name = '{}_{}_{:03d}'.format(tracker['name'], tracker['param'],
-                                              tracker['run_id'])
+            disp_name = '{}_{}_{}'.format(
+                tracker['name'], tracker['param'],
+                format_run_id(tracker['run_id']))
     else:
         disp_name = tracker['disp_name']
 
@@ -100,7 +110,7 @@ def get_tracker_display_name(tracker):
 
 
 def plot_draw_save(y, x, scores, trackers, plot_draw_styles, result_plot_path, plot_opts):
-    plt.rcParams['text.usetex']=True
+    plt.rcParams['text.usetex'] = False
     plt.rcParams["font.family"] = "Times New Roman"
     # Plot settings
     font_size = plot_opts.get('font_size', 20)
@@ -145,10 +155,6 @@ def plot_draw_save(y, x, scores, trackers, plot_draw_styles, result_plot_path, p
         legend_text.append('{} [{:.1f}]'.format(disp_name, scores[id_sort]))
 
     try:
-        # add bold to our method
-        for i in range(1,2):
-            legend_text[-i] = r'\textbf{%s}'%(legend_text[-i])
-
         ax.legend(plotted_lines[::-1], legend_text[::-1], loc=legend_loc, fancybox=False, edgecolor='black',
                   fontsize=font_size_legend, framealpha=1.0)
     except:

@@ -1,6 +1,11 @@
 import torch
-from torchvision.ops.boxes import box_area
 import numpy as np
+
+try:
+    from torchvision.ops.boxes import box_area
+except ModuleNotFoundError:
+    def box_area(boxes):
+        return (boxes[:, 2] - boxes[:, 0]).clamp(min=0) * (boxes[:, 3] - boxes[:, 1]).clamp(min=0)
 
 
 def box_cxcywh_to_xyxy(x):

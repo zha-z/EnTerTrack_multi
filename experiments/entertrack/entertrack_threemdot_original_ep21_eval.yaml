@@ -1,0 +1,30 @@
+DATA:
+  SEARCH: {SIZE: 256}
+  TEMPLATE: {SIZE: 128}
+MODEL:
+  PRETRAIN_FILE: tiny_7_OSTrack_ep0300.pth.tar
+  EXTRA_MERGER: false
+  RETURN_INTER: false
+  PCUM:
+    ENABLED: false
+  BACKBONE:
+    TYPE: vit_tiny_patch16_224_arp
+    STRIDE: 16
+    CE_LOC: [0]
+    CE_KEEP_RATIO: [0.7]
+    CE_TEMPLATE_RANGE: CTR_POINT
+  HEAD:
+    TYPE: CENTER
+    NUM_CHANNELS: 256
+TEST:
+  SAVE_DIR: /data/zjy/multi/output/entertrack_single_lasot
+  CHECKPOINT_NAME: entertrack_threemdot
+  EPOCH: 21
+  SEARCH_FACTOR: 4.0
+  SEARCH_SIZE: 256
+  TEMPLATE_FACTOR: 2.0
+  TEMPLATE_SIZE: 128
+  PCUM:
+    USE_REMOTE: false
+    USE_REMOTE_VISIBLE_MASK: false
+    REMOTE_STATE_SOURCE: tracker

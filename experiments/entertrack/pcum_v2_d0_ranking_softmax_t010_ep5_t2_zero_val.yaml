@@ -1,0 +1,65 @@
+DATA:
+  MAX_SAMPLE_INTERVAL: 200
+  MEAN:
+  - 0.485
+  - 0.456
+  - 0.406
+  STD:
+  - 0.229
+  - 0.224
+  - 0.225
+  SEARCH:
+    CENTER_JITTER: 3
+    FACTOR: 4.0
+    NUMBER: 1
+    SCALE_JITTER: 0.25
+    SIZE: 256
+  TEMPLATE:
+    CENTER_JITTER: 0
+    FACTOR: 2.0
+    NUMBER: 1
+    SCALE_JITTER: 0
+    SIZE: 128
+MODEL:
+  PCUM:
+    ENABLED: true
+    LOCAL_ONLY: false
+    TOKEN_DIM: 192
+    PROMPT_DIM: 192
+    NUM_PROMPTS: 4
+    TOPK: 16
+    SALIENCY_SOURCE: feature_norm
+    FUSION: film
+    ALIGN_GATE: cosine_confidence
+    FUSION_INIT_SCALE: 0.005
+    FUSION_SCALE_MAX: 0.03
+    REMOTE_AGGREGATION: confidence_softmax
+    REMOTE_WEIGHT_TEMPERATURE: 0.10
+    REMOTE_WEIGHT_EPS: 1e-6
+    REMOTE_WEIGHT_MIN_QUALITY: 0.0
+    REMOTE_WEIGHT_DIAGNOSTICS: true
+  BACKBONE:
+    TYPE: vit_tiny_patch16_224_arp
+    STRIDE: 16
+    CE_LOC:
+    - 0
+    CE_KEEP_RATIO:
+    - 0.7
+    CE_TEMPLATE_RANGE: CTR_POINT
+  HEAD:
+    TYPE: CENTER
+    NUM_CHANNELS: 256
+TEST:
+  SAVE_DIR: output/pcum_v2_d_ranking
+  CHECKPOINT_NAME: pcum_v2_d0_ranking_softmax_t010_ep5
+  EPOCH: 5
+  SEARCH_FACTOR: 4.0
+  SEARCH_SIZE: 256
+  TEMPLATE_FACTOR: 2.0
+  TEMPLATE_SIZE: 128
+  PCUM:
+    USE_REMOTE: true
+    USE_REMOTE_VISIBLE_MASK: false
+    REMOTE_STATE_SOURCE: tracker
+    REMOTE_ABLATION: zero
+    KEEP_LOCAL_IF_REMOTE_WORSE: false

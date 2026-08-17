@@ -1,8 +1,10 @@
 import argparse
+import os
 
 import _init_paths  # noqa: F401
 from lib.test.analysis.plot_results import print_results
-from lib.test.evaluation import get_dataset, trackerlist
+from lib.test.evaluation import get_dataset
+from lib.test.evaluation.environment import env_settings
 
 
 LOCAL_CONFIGS = [
@@ -14,7 +16,6 @@ LOCAL_CONFIGS = [
     ("pcum_ablation_current_a_weight", "a_weight_localtest"),
     ("pcum_ablation_current_dropout", "dropout_localtest"),
     ("pcum_ablation_current_full", "full_localtest"),
-    ("pcum_ablation_current_full_crosslayer", "full_crosslayer_localtest"),
 ]
 
 REMOTE_CONFIGS = [
@@ -23,8 +24,22 @@ REMOTE_CONFIGS = [
     ("pcum_ablation_current_a_weight_remote", "a_weight_remote"),
     ("pcum_ablation_current_dropout_remote", "dropout_remote"),
     ("pcum_ablation_current_full_remote", "full_remote"),
-    ("pcum_ablation_current_full_crosslayer_remote", "full_crosslayer_remote"),
 ]
+
+
+class ResultTracker:
+    def __init__(self, name, parameter_name, dataset_name, run_id, display_name):
+        self.name = name
+        self.parameter_name = parameter_name
+        self.dataset_name = dataset_name
+        self.run_id = run_id
+        self.display_name = display_name
+        env = env_settings()
+        self.results_dir = os.path.join(
+            env.results_path,
+            self.name,
+            "%s_%03d" % (self.parameter_name, self.run_id),
+        )
 
 
 def main():
@@ -36,20 +51,20 @@ def main():
 
     trackers = []
     for config_name, display_name in LOCAL_CONFIGS:
-        trackers.extend(trackerlist(
+        trackers.append(ResultTracker(
             name="entertrack",
             parameter_name=config_name,
             dataset_name=args.dataset_name,
-            run_ids=args.runid_local,
+            run_id=args.runid_local,
             display_name=display_name,
         ))
 
     for config_name, display_name in REMOTE_CONFIGS:
-        trackers.extend(trackerlist(
+        trackers.append(ResultTracker(
             name="entertrack",
             parameter_name=config_name,
             dataset_name=args.dataset_name,
-            run_ids=args.runid_remote,
+            run_id=args.runid_remote,
             display_name=display_name,
         ))
 

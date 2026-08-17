@@ -24,6 +24,9 @@ dataset_dict = dict(
     lasot=DatasetInfo(module=pt % "lasot", class_name="LaSOTDataset", kwargs=dict()),
     lasot_lmdb=DatasetInfo(module=pt % "lasot_lmdb", class_name="LaSOTlmdbDataset", kwargs=dict()),
     threemdot_test=DatasetInfo(module=pt % "threemdottest", class_name="ThreemdotDataset", kwargs=dict()),    # Threemdot测试集
+    threemdot_val=DatasetInfo(module=pt % "threemdotval", class_name="ThreemdotValDataset", kwargs=dict()),
+    threemdot_train=DatasetInfo(module=pt % "threemdottrain", class_name="ThreemdotTrainDataset", kwargs=dict()),
+    threemdot_cv=DatasetInfo(module=pt % "threemdotcv", class_name="ThreemdotCVDataset", kwargs=dict()),
 
     vot18=DatasetInfo(module=pt % "vot", class_name="VOTDataset", kwargs=dict()),
     vot22=DatasetInfo(module=pt % "vot", class_name="VOTDataset", kwargs=dict(year=22)),

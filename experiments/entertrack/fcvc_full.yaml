@@ -1,0 +1,150 @@
+BASE_CONFIG: baseline.yaml
+MODEL:
+  BACKBONE:
+    TYPE: vit_tiny_patch16_224_arp
+    STRIDE: 16
+    CE_LOC: [0]
+    CE_KEEP_RATIO: [0.7]
+    CE_TEMPLATE_RANGE: CTR_POINT
+  HEAD:
+    TYPE: CENTER
+    NUM_CHANNELS: 256
+  COLLABORATION:
+    TYPE: fcvc
+    SAFE_COMMIT: true
+  FCVC:
+    ENABLED: true
+    TOKEN_DIM: 192
+    EMBED_DIM: 128
+    TEMPLATE_TOKENS: 64
+    SEARCH_TOKENS: 256
+    GRID_SIZE: 16
+    NUM_QUERIES: 8
+    NUM_SENDERS: 2
+    NUM_HEADS: 4
+    SAMPLES_PER_SENDER: 4
+    MID_TAP_AFTER_BLOCK: 3
+    HIGH_TAP_AFTER_BLOCK: 6
+    REPLAY_START_BLOCK: 4
+    REPLAY_END_BLOCK: 6
+    RESIDUAL_NORM_BOUND: 0.0
+    NULL_BIAS: 2.0
+  TEACHER:
+    ENABLED: true
+    GT_ROI_TRAIN_ONLY: true
+    STOP_GRADIENT_TO_STUDENT_TARGET: true
+  SAFE_COMMIT:
+    ENABLED: true
+    STATE_SOURCE: local
+    REPORT_SOURCE: collaborative_with_local_fallback
+
+TRAIN:
+  SEED: 42
+  EPOCH: 30
+  DISTRIBUTED: true
+  WORLD_SIZE: 6
+  BATCH_SIZE: 18
+  MICRO_BATCH_SIZE: 1
+  MICRO_BATCH_SIZE_PER_GPU: 1
+  ACCUMULATION: 3
+  ACCUMULATION_STEPS: 3
+  GLOBAL_BATCH_SIZE: 18
+  STEPS_PER_EPOCH: 556
+  TOTAL_STEPS: 16680
+  PRINT_INTERVAL: 50
+  VAL_EPOCH_INTERVAL: 1
+  GRADIENT_CLIP_MAX_NORM: 10.0
+  OPTIMIZER:
+    TYPE: AdamW
+    BETAS: [0.9, 0.999]
+    EPS: 1.0e-8
+    WEIGHT_DECAY: 1.0e-4
+  LR:
+    STUDENT: 1.0e-4
+    TEACHER: 1.0e-4
+  SCHEDULER:
+    TYPE: linear_warmup_then_cosine
+    WARMUP_EPOCHS: 1
+    MIN_LR: 1.0e-6
+  LOSS:
+    L_cls: 1.0
+    L_giou: 2.0
+    L_l1: 5.0
+    L_align: 0.5
+    L_recon: 1.0
+    L_safe: 0.5
+    L_cycle: 0.1
+    L_teacher_track: 0.25
+  CHECKPOINT:
+    SAVE_EPOCH_CHECKPOINTS: true
+    EPOCH_PATTERN: epoch_%02d.pth
+    INTERRUPT_INTERVAL_OPTIMIZER_STEPS: 1000
+    FORMAL_TEST_CHECKPOINT: best_val_auc.pth
+    REFERENCE_CHECKPOINT: epoch_30.pth
+    STUDENT_EXPORT: fcvc_student_epoch30.pth
+
+DATA:
+  MAX_SAMPLE_INTERVAL: 200
+  SPLIT:
+    MODE: target_level
+    SEED: 42
+    TRAIN_TARGETS: 18
+    VAL_TARGETS: 4
+    BIND_ABC_VIEWS: true
+  TRAIN:
+    DATASET: threemdot_train
+    DATASETS_NAME: [THREEMDOT]
+    SPLIT: official_train
+    RANDOM_SYNC_SAMPLING: true
+    MULTI_VIEW_SYNC: true
+    SYNC_GROUPS_PER_EPOCH: 3336
+    RECEIVER_ASSIGNMENTS_PER_GROUP: 3
+    SAMPLE_PER_EPOCH: 10008
+    RECEIVER_CASES: 10008
+    TARGET_BALANCED: true
+    SAMPLE_WITH_REPLACEMENT: true
+    MANIFEST: output/multi_agent_collaboration_clean/fcvc_manual_run/full_train_receiver_manifest.csv
+  TEST:
+    DATASET: threemdot_test
+  VAL:
+    ENABLED: true
+    DATASET: threemdot_train
+    SPLIT: fixed_target_val
+    SYNC_GROUPS: 504
+    RECEIVER_CASES: 1512
+    MANIFEST_SEED: 4242
+    RANDOM_AUGMENTATION: false
+    CENTER_JITTER: 0.0
+    SCALE_JITTER: 0.0
+  SAMPLER:
+    REPLACEMENT: true
+    HARD_MINING: false
+    OLD_FAILURE_TARGET_WEIGHTING: false
+    ONE_VISIT_PER_CASE_PER_EPOCH: false
+    SYNC_ABC_GROUP_BOUND: true
+    STEPS_PER_EPOCH: 556
+    TOTAL_STEPS: 16680
+  PROCESSING:
+    TEMPLATE_FACTOR: 2.0
+    TEMPLATE_SIZE: 128
+    SEARCH_FACTOR: 4.0
+    SEARCH_SIZE: 256
+    PRECISION: FP32
+
+TEST:
+  DATASET: threemdot_test
+  EPOCH: 30
+  FCVC_CHECKPOINT: output/entertrack/fcvc_full/checkpoints/fcvc_student_epoch30.pth
+  FCVC_REFERENCE_CHECKPOINT: output/entertrack/fcvc_full/checkpoints/epoch_30.pth
+  SAFE_COMMIT: true
+  SAVE_RESULTS: true
+
+VALIDATION:
+  PAIR_ENABLED: true
+  PAIR_INTERVAL: 1
+  ONLINE_ENABLED: true
+  ONLINE_INTERVAL: 5
+  EPSILON: 1.0e-6
+  BEST_METRIC: AUC_collab
+  TIE_BREAKER: [AUC_delta, harmful_rate, earlier_epoch]
+  OUTPUT_DIR: output/train/entertrack/fcvc_full/validation

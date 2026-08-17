@@ -119,6 +119,22 @@ python tracking/train.py --script entertracck --config entertrack --script_teach
 
 Replace `--config` with the desired model config under `experiments/entertrack`. We use [wandb](https://github.com/wandb/client) to record detailed training logs, in case you don't want to use wandb, set `--use_wandb 0`.
 
+### FCVC unified entrypoints
+
+```bash
+# Train (fixed seed=42, 20 epochs)
+python tracking/train.py --script entertrack --config fcvc_full
+
+# Resume
+python tracking/train.py --script entertrack --config fcvc_full --resume /path/to/checkpoint.pth
+
+# Test
+python tracking/test.py entertrack fcvc_full --dataset threemdot_test
+
+# Analyze existing results
+python tracking/analysis_results.py --tracker_name entertrack --tracker_param fcvc_full --dataset_name threemdot_test
+```
+
 
 ## Evaluation
 

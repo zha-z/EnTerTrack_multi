@@ -1,0 +1,28 @@
+BASE_CONFIG: entertrack_c3r_c1_f0.yaml
+MODEL_ROLE: c3r_temporal_gate_f0_default_off
+MODEL:
+  TEMPORAL_GATE:
+    ENABLED: false
+    INPUT_DIM: 10
+    HIDDEN_DIM: 16
+    WINDOW: 8
+    MAX_GATE: 0.25
+TRAIN:
+  TEMPORAL_GATE:
+    ENABLED: false
+    SEED: 20260718
+    LR: 0.001
+    WEIGHT_DECAY: 0.0001
+    BATCH_SIZE: 256
+    MAX_EPOCHS: 20
+    GRAD_CLIP_NORM: 1.0
+    EARLY_STOP_PATIENCE: 3
+DATA:
+  TRAIN:
+    SPLIT_FILE: lib/train/data_specs/threemdot/c3r_f0_temporal_inner_train.txt
+TEST:
+  TEMPORAL_GATE:
+    ENABLED: false
+    CHECKPOINT: ""
+    CHECKPOINT_SHA256: ""
+    ROLLOUT_CAPTURE: false

@@ -1,6 +1,12 @@
-import lmdb
+try:
+    import lmdb
+except ModuleNotFoundError:
+    lmdb = None
 import numpy as np
-import cv2
+try:
+    import cv2
+except ModuleNotFoundError:
+    cv2 = None
 import json
 
 LMDB_ENVS = dict()
@@ -9,6 +15,8 @@ LMDB_FILELISTS = dict()
 
 
 def get_lmdb_handle(name):
+    if lmdb is None:
+        raise ImportError("lmdb is required to read LMDB datasets.")
     global LMDB_HANDLES, LMDB_FILELISTS
     item = LMDB_HANDLES.get(name, None)
     if item is None:
@@ -21,6 +29,8 @@ def get_lmdb_handle(name):
 
 
 def decode_img(lmdb_fname, key_name):
+    if cv2 is None:
+        raise ImportError("OpenCV is required to decode LMDB images.")
     handle = get_lmdb_handle(lmdb_fname)
     binfile = handle.get(key_name.encode())
     if binfile is None:

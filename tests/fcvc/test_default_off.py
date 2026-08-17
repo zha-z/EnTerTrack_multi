@@ -1,0 +1,8 @@
+import unittest
+
+import common
+
+
+class FCVCDefaultOffContractTest(unittest.TestCase):
+    test_disabled_and_missing_remote_are_identity = common.legacy_model.FCVCContractTest.test_default_off_and_no_remote_identity
+    test_e0_and_c1_commit_paths_are_unchanged = common.legacy_runtime.FCVCRuntimeIntegrationTest.test_default_off_e0_c1_commit_compatibility

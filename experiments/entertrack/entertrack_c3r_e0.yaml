@@ -1,0 +1,27 @@
+BASE_CONFIG: entertrack_threemdot_lasot_ft_cons.yaml
+MODEL_ROLE: c3r_e0_frozen_local
+MODEL:
+  PCUM:
+    ENABLED: false
+  C3R:
+    ENABLED: false
+  USE_SEARCH_PROMPT: false
+TRAIN:
+  MULTIVIEW:
+    ENABLED: false
+  C3R:
+    ENABLED: false
+  PCUM:
+    USE_REAL_MULTIVIEW: false
+TEST:
+  C3R:
+    ENABLED: false
+  PCUM:
+    USE_REMOTE: false
+    USE_REMOTE_VISIBLE_MASK: false
+  MOTION_STATE:
+    ENABLED: false
+  MCR:
+    ENABLED: false
+  COOP:
+    ENABLED: false

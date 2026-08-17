@@ -5,6 +5,11 @@ import sys
 from itertools import product
 from collections import OrderedDict
 from lib.test.evaluation import Sequence, Tracker
+from lib.test.tracker.motion_state import (
+    motion_diagnostics_file,
+    save_motion_diagnostics,
+)
+from lib.test.tracker.mcr_redetection import save_mcr_diagnostics
 import torch
 
 
@@ -30,6 +35,10 @@ def _save_tracker_output(seq: Sequence, tracker: Tracker, output: dict):
     def save_time(file, data):
         exec_times = np.array(data).astype(float)
         np.savetxt(file, exec_times, delimiter='\t', fmt='%f')
+
+    def save_float_matrix(file, data):
+        values = np.asarray(data, dtype=float)
+        np.savetxt(file, values, delimiter='\t', fmt='%.10f')
 
     def save_score(file, data):
         scores = np.array(data).astype(float)
@@ -112,6 +121,21 @@ def _save_tracker_output(seq: Sequence, tracker: Tracker, output: dict):
                 print("saving APCE...")
                 bbox_file = '{}_APCE.txt'.format(base_results_path)
                 save_score(bbox_file, data)
+
+        if key == 'pcum_remote_weights':
+            weight_file = '{}_pcum_remote_weights.txt'.format(base_results_path)
+            save_float_matrix(weight_file, data)
+
+        if key == 'pcum_remote_suppression':
+            suppression_file = '{}_pcum_remote_suppression.txt'.format(
+                base_results_path)
+            save_float_matrix(suppression_file, data)
+
+        if key == 'motion_state_diagnostics':
+            save_motion_diagnostics(tracker.results_dir, seq.name, data)
+
+        if key == 'mcr_diagnostics':
+            save_mcr_diagnostics(tracker.results_dir, seq.name, data)
 
         elif key == 'time':
             if isinstance(data[0], dict):
@@ -443,14 +467,37 @@ def run_three_multi_sequence(seq_a: Sequence, seq_b: Sequence ,seq_c: Sequence, 
     except:
         pass
 
-    def _results_exist_a():
-        if seq_a.object_ids is None:
-            bbox_file = '{}/{}.txt'.format(tracker.results_dir, seq_a.name)
-            return os.path.isfile(bbox_file)
+    def _motion_state_log_enabled():
+        try:
+            params = tracker.get_parameters()
+            motion_cfg = getattr(params.cfg.TEST, "MOTION_STATE", None)
+            return bool(
+                getattr(motion_cfg, "ENABLED", False)
+                and getattr(motion_cfg, "LOG_ENABLED", False)
+            )
+        except Exception:
+            return False
+
+    def _sequence_exists(seq):
+        if seq.object_ids is None:
+            bbox_file = '{}/{}.txt'.format(tracker.results_dir, seq.name)
+            exists = os.path.isfile(bbox_file)
         else:
-            bbox_files = ['{}/{}_{}.txt'.format(tracker.results_dir, seq_a.name, obj_id) for obj_id in seq_a.object_ids]
-            missing = [not os.path.isfile(f) for f in bbox_files]
-            return sum(missing) == 0
+            bbox_files = [
+                '{}/{}_{}.txt'.format(tracker.results_dir, seq.name, obj_id)
+                for obj_id in seq.object_ids
+            ]
+            exists = not any(not os.path.isfile(path) for path in bbox_files)
+        if exists and _motion_state_log_enabled():
+            exists = os.path.isfile(
+                motion_diagnostics_file(tracker.results_dir, seq.name)
+            )
+        return exists
+
+    def _results_exist_a():
+        if _motion_state_log_enabled():
+            return all(_sequence_exists(seq) for seq in (seq_a, seq_b, seq_c))
+        return _sequence_exists(seq_a)
 
     if _results_exist_a() and not debug:
         print('FPS: {}'.format(-1))
