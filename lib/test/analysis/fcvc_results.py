@@ -1,14 +1,16 @@
-"""Unified read-only analysis for existing FCVC tracking results."""
+"""OSTrack-compatible read-only analysis for existing tracking results."""
 
 import argparse
 import csv
 import hashlib
 import json
-import math
 import os
 from pathlib import Path
 
 import numpy as np
+import torch
+
+from lib.test.analysis.extract_results import calc_seq_err_robust
 
 
 def _load_boxes(path):
@@ -19,28 +21,48 @@ def _load_boxes(path):
     return boxes.reshape(-1, 4)
 
 
-def _iou(pred, target):
-    tl = np.maximum(pred[:, :2], target[:, :2])
-    br = np.minimum(pred[:, :2] + pred[:, 2:], target[:, :2] + target[:, 2:])
-    wh = np.maximum(br - tl, 0.0)
-    inter = wh[:, 0] * wh[:, 1]
-    union = pred[:, 2] * pred[:, 3] + target[:, 2] * target[:, 3] - inter
-    return np.divide(inter, union, out=np.zeros_like(inter), where=union > 0)
+def _curves(pred, target, target_visible=None, dataset="threemdot"):
+    """Calculate metrics with the repository's standard OSTrack evaluator.
 
+    This intentionally delegates sequence alignment, first-frame handling,
+    visibility masking, and error calculation to ``calc_seq_err_robust`` so
+    this compact JSON/CSV exporter cannot silently drift from
+    ``extract_results.py``.
+    """
+    pred = torch.as_tensor(np.asarray(pred, dtype=float).reshape(-1, 4))
+    target = torch.as_tensor(np.asarray(target, dtype=float).reshape(-1, 4))
+    visible = (
+        torch.as_tensor(np.asarray(target_visible), dtype=torch.uint8).reshape(-1)
+        if target_visible is not None else None
+    )
+    overlap, error, norm_error, valid = calc_seq_err_robust(
+        pred, target, dataset, visible
+    )
+    sequence_length = int(target.shape[0])
+    if sequence_length <= 0:
+        raise ValueError("cannot evaluate an empty sequence")
 
-def _curves(pred, target):
-    overlap = _iou(pred, target)
-    p_center = pred[:, :2] + 0.5 * pred[:, 2:]
-    t_center = target[:, :2] + 0.5 * target[:, 2:]
-    error = np.linalg.norm(p_center - t_center, axis=1)
-    scale = np.sqrt(np.maximum(target[:, 2] * target[:, 3], 1e-12))
-    norm_error = error / scale
+    overlap_thresholds = torch.arange(0.0, 1.05, 0.05, dtype=torch.float64)
+    center_thresholds = torch.arange(0, 51, dtype=torch.float64)
+    norm_center_thresholds = center_thresholds / 100.0
+    success_curve = (
+        (overlap.view(-1, 1) > overlap_thresholds.view(1, -1))
+        .sum(0).double() / sequence_length
+    )
+    precision_curve = (
+        (error.view(-1, 1) <= center_thresholds.view(1, -1))
+        .sum(0).double() / sequence_length
+    )
+    norm_precision_curve = (
+        (norm_error.view(-1, 1) <= norm_center_thresholds.view(1, -1))
+        .sum(0).double() / sequence_length
+    )
     return {
-        "auc": float(np.mean([(overlap >= value).mean() for value in np.linspace(0, 1, 21)])),
-        "precision": float((error <= 20.0).mean()),
-        "normalized_precision": float((norm_error <= 0.2).mean()),
-        "mean_iou": float(overlap.mean()),
-        "frame_count": int(len(overlap)),
+        "auc": float(success_curve.mean().item()),
+        "precision": float(precision_curve[20].item()),
+        "normalized_precision": float(norm_precision_curve[20].item()),
+        "mean_iou": float(overlap[valid].mean().item()),
+        "frame_count": sequence_length,
     }
 
 
@@ -85,28 +107,26 @@ def analyze(tracker_name, tracker_param, dataset_name, run_id=None,
             continue
         pred = _load_boxes(result_path)
         target = np.asarray(sequence.ground_truth_rect, dtype=float).reshape(-1, 4)
-        length = min(len(pred), len(target))
-        if length == 0:
+        if len(pred) == 0 or len(target) == 0:
             continue
-        pred, target = pred[:length].copy(), target[:length].copy()
-        pred[0] = target[0]
-        valid = np.isfinite(target).all(axis=1) & (target[:, 2:] > 0).all(axis=1)
-        metrics = _curves(pred[valid], target[valid])
+        metrics = _curves(
+            pred,
+            target,
+            target_visible=getattr(sequence, "target_visible", None),
+            dataset=sequence.dataset,
+        )
         rows.append({"sequence": name, "target": _target(name), "view": _view(name), **metrics})
         if compare_dir is not None:
             reference_path = compare_dir / (name + ".txt")
             if reference_path.is_file():
                 reference = _load_boxes(reference_path)
-                ref_length = min(len(reference), len(target))
-                if ref_length > 0:
-                    reference = reference[:ref_length].copy()
-                    ref_target = target[:ref_length].copy()
-                    reference[0] = ref_target[0]
-                    ref_valid = (
-                        np.isfinite(ref_target).all(axis=1)
-                        & (ref_target[:, 2:] > 0).all(axis=1)
+                if len(reference) > 0:
+                    reference_metrics = _curves(
+                        reference,
+                        target,
+                        target_visible=getattr(sequence, "target_visible", None),
+                        dataset=sequence.dataset,
                     )
-                    reference_metrics = _curves(reference[ref_valid], ref_target[ref_valid])
                     comparisons.append({
                         "sequence": name,
                         "auc_delta": metrics["auc"] - reference_metrics["auc"],
@@ -128,7 +148,7 @@ def analyze(tracker_name, tracker_param, dataset_name, run_id=None,
         for value in sorted({row[field] for row in rows}):
             group = [row for row in rows if row[field] == value]
             output[value] = {
-                key: float(np.mean([item[key] for item in group]))
+                key: float(np.nanmean([item[key] for item in group]))
                 for key in ("auc", "precision", "normalized_precision", "mean_iou")
             }
         return output
@@ -139,8 +159,16 @@ def analyze(tracker_name, tracker_param, dataset_name, run_id=None,
         "tracker_param": tracker_param,
         "dataset_name": dataset_name,
         "sequence_count": len(rows),
+        "evaluation_protocol": {
+            "name": "ostrack",
+            "implementation": "lib.test.analysis.extract_results.calc_seq_err_robust",
+            "success_comparator": ">",
+            "uses_target_visible": True,
+            "exclude_invalid_frames": False,
+            "sequence_macro_average": True,
+        },
         "overall": {
-            key: float(np.mean([row[key] for row in rows]))
+            key: float(np.nanmean([row[key] for row in rows]))
             for key in ("auc", "precision", "normalized_precision", "mean_iou")
         },
         "per_target": grouped("target"),
@@ -169,7 +197,9 @@ def analyze(tracker_name, tracker_param, dataset_name, run_id=None,
     output_dir = Path(output_dir or results_dir / "analysis")
     output_dir.mkdir(parents=True, exist_ok=True)
     with (output_dir / "sequence_metrics.csv").open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer = csv.DictWriter(
+            handle, fieldnames=list(rows[0]), lineterminator="\n"
+        )
         writer.writeheader()
         writer.writerows(rows)
     (output_dir / "summary.json").write_text(

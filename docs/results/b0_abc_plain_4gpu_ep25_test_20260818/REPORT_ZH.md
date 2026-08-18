@@ -2,7 +2,7 @@
 
 ## 结论
 
-本次使用 `B0-ABC-Plain-4GPU` 的 epoch 25 checkpoint，在 Three-MDOT test 上完成了 105/105 个独立视角序列的测试。Plain ViT-Tiny 不进行跨视角融合，因此下表的 Overall 是 105 个 A/B/C 视角序列的宏平均，不是融合轨迹指标。
+本次使用 `B0-ABC-Plain-4GPU` 的 epoch 25 checkpoint，在 Three-MDOT test 上完成了 105/105 个独立视角序列的测试。Plain ViT-Tiny 不进行跨视角融合，因此下表的 Overall 是 105 个 A/B/C 视角序列的宏平均，不是融合轨迹指标。指标已于 2026-08-18 按仓库 OSTrack 标准评测路径重新计算，旧版 unified diagnostic AUC 54.3028 不再作为正式结果。
 
 训练期没有出现“从 epoch 1 到 epoch 25，train loss 下降且 val loss 上升”的严格单调剪刀形：train loss 从 1.00480 降至 0.73315（-27.04%），val loss 从 0.95669 降至 0.90791（-5.10%）。但是 val loss 在 epoch 4 达到最低值 0.87986；从 epoch 4 到 25，train loss 又下降 17.96%，而 val loss 回升 3.19%。因此可描述为“早期最低点之后出现轻度 generalization gap”，不能描述成全程单调恶化。当前 validation 每个 epoch 有随机采样、center/scale jitter、5% 灰度和 50% 水平翻转，这会给 val loss 带来随机波动。
 
@@ -10,15 +10,27 @@
 
 | 视角 | AUC | Precision | Normalized Precision | Mean IoU |
 | --- | ---: | ---: | ---: | ---: |
-| Overall（105 sequences） | 54.3028 | 69.9583 | 63.0328 | 53.7850 |
-| A（35 sequences） | 53.1628 | 70.2450 | 63.3436 | 52.6041 |
-| B（35 sequences） | 53.1089 | 68.4747 | 59.6734 | 52.4735 |
-| C（35 sequences） | 56.6367 | 71.1552 | 66.0813 | 56.2775 |
+| Overall（105 sequences） | 48.9464 | 64.6659 | 77.6050 | 56.4467 |
+| A（35 sequences） | 46.7075 | 63.3401 | 76.7755 | 53.3910 |
+| B（35 sequences） | 48.8976 | 64.7136 | 76.9510 | 55.6166 |
+| C（35 sequences） | 51.2340 | 65.9438 | 79.0886 | 60.4469 |
 
-- Sequence-level bootstrap AUC 95% CI：49.1066–59.7589。
+- Sequence-level bootstrap AUC 95% CI：43.3233–54.8360。
+- OSTrack 口径：复用 `lib/test/analysis/extract_results.py::calc_seq_err_robust`；success thresholds 为 0.00–1.00、步长 0.05，比较符为严格 `IoU > threshold`；读取 `target_visible`；首帧强制为初始化 GT；`exclude_invalid_frames=false`；最终对 105 个序列做宏平均。
+- Mean IoU 仅为附加诊断：先在每个序列的 visible-valid 帧上求均值，再对有 valid 帧的序列求 `nanmean`。它不参与 AUC 计算；`md3003-3` 没有 visible-valid 帧，因此该序列的 Mean IoU 为 NaN。
 - 记录的平均推理时间为 0.004257 秒/帧，对应 234.93 FPS。该数值来自各 worker 的逐帧 `_time.txt`，不是四卡作业的端到端 wall-clock throughput。
 - 测试使用 `no_gt_inference=1`，remote state source 为 `none`。
 - 完整性检查：bbox 105/105、time 105/105、max_score 105/105、APCE 105/105。
+
+### 同口径基线比较
+
+| 模型 | OSTrack AUC | 相对 B0-ABC-Plain |
+| --- | ---: | ---: |
+| B0-ABC-Plain ep25 | 48.9464 | — |
+| Current baseline ep25 | 48.1520 | B0 +0.7944 |
+| Original ep21 | 47.2014 | B0 +1.7450 |
+
+三者均由相同代码对已有 bbox 预测离线重算；没有重新推理，也没有使用 test 指标选择 checkpoint。
 
 ## 模型与 checkpoint
 
@@ -71,10 +83,10 @@ MPLCONFIGDIR=/tmp/mpl-b0-abc-test \
 
 - `training_epoch_metrics.csv`：25 个 epoch 的 train/val total、GIoU、L1、Focal、IoU 和 LR。
 - `multiview_epoch_counts.jsonl`：每个 epoch 的 A/B/C 与 `target_id × view_id` 计数。
-- `test_summary.json`：整体、逐视角和逐 target 指标。
-- `sequence_metrics.csv`：105 个序列视角的独立指标。
+- `test_summary.json`：OSTrack 口径的整体、逐视角和逐 target 指标，并内嵌 `evaluation_protocol`。
+- `sequence_metrics.csv`：OSTrack 口径的 105 个序列视角独立指标。
 - `test_run.log`：正式测试原始终端日志。
 - `tracking_results_manifest.csv`：420 个本地原始结果文件的文件名、大小和 SHA256；逐帧 bbox 文件未提交。
 - `provenance.json`：checkpoint、日志、runid、数据集和因果约束摘要。
 
-指标由仓库统一分析入口 `tracking/analysis_results.py` 生成。为使该 CLI 可运行，本次仅修复了 `runid` CLI 名称到内部 `run_id` 参数的映射，不改动任何指标公式。
+指标由仓库统一分析入口 `tracking/analysis_results.py` 生成。该入口现在直接复用 OSTrack 的 `calc_seq_err_robust`，不再维护另一套 `IoU >= threshold` 且忽略 `target_visible` 的公式。

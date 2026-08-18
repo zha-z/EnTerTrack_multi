@@ -133,9 +133,15 @@ def main():
 
     net = checkpoint["net"]
     summary = json.loads(args.test_summary.read_text(encoding="utf-8"))
+    evaluation = summary.get("evaluation_protocol", {})
     manifest = {
         "config": args.config,
         "dataset": args.dataset,
+        "evaluation_protocol": evaluation.get("name"),
+        "evaluator": evaluation.get("implementation"),
+        "evaluation_success_comparator": evaluation.get("success_comparator"),
+        "evaluation_uses_target_visible": evaluation.get("uses_target_visible"),
+        "evaluation_exclude_invalid_frames": evaluation.get("exclude_invalid_frames"),
         "runid": args.runid,
         "checkpoint_epoch": int(checkpoint["epoch"]),
         "checkpoint_sha256": sha256(args.checkpoint),

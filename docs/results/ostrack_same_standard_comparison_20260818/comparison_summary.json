@@ -1,0 +1,68 @@
+{
+  "dataset": "threemdot_test",
+  "evaluation_protocol": {
+    "exclude_invalid_frames": false,
+    "implementation": "lib.test.analysis.extract_results.calc_seq_err_robust",
+    "name": "ostrack",
+    "sequence_macro_average": true,
+    "success_comparator": ">",
+    "success_threshold_count": 21,
+    "success_threshold_step": 0.05,
+    "uses_target_visible": true
+  },
+  "models": {
+    "b0_abc_plain_ep25": {
+      "auc": 0.48946360155249385,
+      "auc_95ci": [0.43323275226129815, 0.5483601048721725],
+      "mean_iou": 0.5644671962852276,
+      "normalized_precision": 0.7760503459797876,
+      "precision": 0.6466585323186212,
+      "result_dir": "output/test/tracking_results/entertrack/b0_abc_plain_4gpu_26025",
+      "runid": 26025,
+      "sequence_count": 105,
+      "view_auc": {
+        "A": 0.46707495522398507,
+        "B": 0.48897619576769064,
+        "C": 0.5123396536658057
+      }
+    },
+    "current_baseline_ep25": {
+      "auc": 0.48151982560206125,
+      "auc_95ci": [0.42341918618534535, 0.5415815948954396],
+      "mean_iou": 0.5559635920554771,
+      "normalized_precision": 0.7725570444606397,
+      "precision": 0.6369902570951578,
+      "result_dir": "output/test/tracking_results/entertrack/pcum_ablation_current_baseline_ep0025_eval_16025",
+      "runid": 16025,
+      "sequence_count": 105,
+      "view_auc": {
+        "A": 0.4563067439100407,
+        "B": 0.4877285222415467,
+        "C": 0.5005242106545962
+      }
+    },
+    "original_ep21": {
+      "auc": 0.472014100008686,
+      "auc_95ci": [0.4161414963964465, 0.529160198891511],
+      "mean_iou": 0.5499207675856757,
+      "normalized_precision": 0.762913052374669,
+      "precision": 0.6372296839879812,
+      "result_dir": "output/test/tracking_results/entertrack/entertrack_threemdot_original_ep21_eval_15021",
+      "runid": 15021,
+      "sequence_count": 105,
+      "view_auc": {
+        "A": 0.44833814804480254,
+        "B": 0.4679653259518512,
+        "C": 0.49973882602940417
+      }
+    }
+  },
+  "relative_to_b0": {
+    "current_baseline_ep25": {
+      "auc_delta": -0.0079437759504326
+    },
+    "original_ep21": {
+      "auc_delta": -0.01744950154380785
+    }
+  }
+}
