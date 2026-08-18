@@ -383,8 +383,8 @@ class LTRTrainer(BaseTrainer):
                 if (self.settings.print_stats is None or name in self.settings.print_stats):
                     if hasattr(val, 'avg'):
                         print_str += '%s: %.5f  ,  ' % (name, val.avg)
-                    # else:
-                    #     print_str += '%s: %r  ,  ' % (name, val)
+                    elif hasattr(val, 'val'):
+                        print_str += '%s: %.8g  ,  ' % (name, val.val)
 
             print(print_str[:-5])
             log_str = print_str[:-5] + '\n'
