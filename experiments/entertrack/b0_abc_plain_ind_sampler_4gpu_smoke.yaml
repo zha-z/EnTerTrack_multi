@@ -1,0 +1,22 @@
+BASE_CONFIG: b0_abc_plain_ind_sampler_4gpu
+EXPERIMENT_NAME: B0-ABC-Plain-IndSampler-Smoke
+
+DATA:
+  TRAIN:
+    SAMPLE_PER_EPOCH: 16
+  VAL:
+    SAMPLE_PER_EPOCH: 8
+
+TRAIN:
+  EPOCH: 1
+  TOTAL_EPOCH: 1
+  LR_DROP_EPOCH: 1
+  NUM_WORKER: 0
+  PRINT_INTERVAL: 1
+  MAX_ITERS_PER_EPOCH: 2
+  RESUME: false
+
+TEST:
+  SAVE_DIR: /tmp/b0_abc_plain_ind_sampler_smoke
+  CHECKPOINT_NAME: b0_abc_plain_ind_sampler_4gpu_smoke
+  EPOCH: 1

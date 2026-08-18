@@ -1,0 +1,1 @@
+CUDA_VISIBLE_DEVICES=0,1,2,3 PYTHONPATH=. MPLCONFIGDIR=/tmp/mpl-e1-formal-r002 PYTHONUNBUFFERED=1 /home/user/.conda/envs/zjy/bin/torchrun --standalone --nproc_per_node=4 lib/train/run_training.py --script entertrack --config b0_abc_plain_4gpu_ep50 --save_dir output/diagnostics/b0_abc_plain_long/e1_run_20260818_seed42_4gpu_r002 --seed 42 --use_wandb 0

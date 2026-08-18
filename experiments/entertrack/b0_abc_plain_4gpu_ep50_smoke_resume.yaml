@@ -1,0 +1,11 @@
+BASE_CONFIG: b0_abc_plain_4gpu_ep50_smoke
+EXPERIMENT_NAME: B0-ABC-Plain-Long-Smoke-Resume
+
+TRAIN:
+  TOTAL_EPOCH: 2
+  EPOCH: 2
+  RESUME: true
+
+TEST:
+  CHECKPOINT_NAME: b0_abc_plain_4gpu_ep50_smoke_resume
+  EPOCH: 2

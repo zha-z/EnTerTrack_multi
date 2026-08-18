@@ -2,13 +2,14 @@ import os
 import datetime
 import json
 from contextlib import nullcontext
-from collections import Counter, OrderedDict
+from collections import Counter, OrderedDict, defaultdict
 
 from lib.train.data.wandb_logger import WandbWriter
 from lib.train.trainers import BaseTrainer
 from lib.train.admin import AverageMeter, StatValue
 from lib.train.admin import TensorboardWriter
 import torch
+import torch.distributed as dist
 import time
 from torch.utils.data.distributed import DistributedSampler
 from torch.cuda.amp import autocast
@@ -89,6 +90,14 @@ class LTRTrainer(BaseTrainer):
         target_view_counts = Counter()
         multiview_groups = 0
         validation_manifest_rows = []
+        independent_manifest_rows = []
+        delta_t_by_view = defaultdict(list)
+        unique_pairs_by_view = defaultdict(set)
+        visibility_coverage = {}
+        independent_groups_with_distinct_frames = 0
+        causal_violations = 0
+        visibility_violations = 0
+        independent_sampling_active = False
 
         for i, data in enumerate(loader, 1):
             self.data_read_done_time = time.time()
@@ -105,6 +114,9 @@ class LTRTrainer(BaseTrainer):
                 getattr(getattr(actor_cfg, "TRAIN", None), "MULTIVIEW", None),
                 "DIAGNOSTICS_ENABLED", False))
             if diagnostics_enabled:
+                multiview_cfg = getattr(actor_cfg.TRAIN, "MULTIVIEW", None)
+                independent_sampling_active = bool(getattr(
+                    multiview_cfg, "INDEPENDENT_VIEW_SAMPLING", False))
                 images = data.get("template_images", None)
                 if not torch.is_tensor(images) or images.dim() != 5:
                     raise RuntimeError(
@@ -116,6 +128,12 @@ class LTRTrainer(BaseTrainer):
                     raise RuntimeError("Multiview target/view metadata is missing")
                 if len(view_ids) != num_views or len(target_ids) != group_batch:
                     raise RuntimeError("Multiview metadata shape mismatch")
+                template_ids = data.get("template_frame_ids", [])
+                search_ids = data.get("search_frame_ids", [])
+                if independent_sampling_active:
+                    if len(template_ids) != num_views or len(search_ids) != num_views:
+                        raise RuntimeError(
+                            "Independent-view frame metadata must have one entry per view")
                 for view_index in range(num_views):
                     labels = view_ids[view_index]
                     for batch_index in range(group_batch):
@@ -123,20 +141,66 @@ class LTRTrainer(BaseTrainer):
                         target_id = str(target_ids[batch_index])
                         multiview_counts[view_label] += 1
                         target_view_counts[(target_id, view_label)] += 1
+                        frame_slot = view_index if independent_sampling_active else 0
+                        template_frame = int(template_ids[frame_slot][batch_index])
+                        search_frame = int(search_ids[frame_slot][batch_index])
                         save_val_manifest = bool(getattr(
-                            getattr(actor_cfg.TRAIN, "MULTIVIEW", None),
+                            multiview_cfg,
                             "SAVE_VAL_MANIFEST", False))
                         if save_val_manifest and not loader.training:
-                            template_ids = data.get("template_frame_ids", [])
-                            search_ids = data.get("search_frame_ids", [])
-                            template_frame = int(template_ids[0][batch_index])
-                            search_frame = int(search_ids[0][batch_index])
                             validation_manifest_rows.append({
                                 "target_id": target_id,
                                 "view_id": view_label,
                                 "template_frame": template_frame,
                                 "search_frame": search_frame,
                             })
+                        if independent_sampling_active:
+                            delta_t = search_frame - template_frame
+                            if delta_t <= 0:
+                                causal_violations += 1
+                            template_valid = bool(
+                                data["template_view_valid"][view_index][batch_index])
+                            search_valid = bool(
+                                data["search_view_valid"][view_index][batch_index])
+                            if not template_valid or not search_valid:
+                                visibility_violations += 1
+                            delta_t_by_view[view_label].append(delta_t)
+                            unique_pairs_by_view[view_label].add(
+                                (template_frame, search_frame))
+                            independent_manifest_rows.append({
+                                "target_id": target_id,
+                                "view_id": view_label,
+                                "template_frame": template_frame,
+                                "search_frame": search_frame,
+                                "delta_t": delta_t,
+                                "template_visible": template_valid,
+                                "search_visible": search_valid,
+                            })
+                            visible_counts = data.get("view_visible_frame_counts", [])
+                            total_counts = data.get("view_total_frame_counts", [])
+                            common_count = data.get("common_visible_frame_count", None)
+                            common_total = data.get("common_visible_total_frames", None)
+                            target_coverage = visibility_coverage.setdefault(
+                                target_id, {"views": {}})
+                            target_coverage["views"][view_label] = {
+                                "visible_frames": int(
+                                    visible_counts[view_index][batch_index]),
+                                "total_frames": int(
+                                    total_counts[view_index][batch_index]),
+                            }
+                            target_coverage["abc_common_visible_frames"] = int(
+                                common_count[batch_index])
+                            target_coverage["abc_common_total_frames"] = int(
+                                common_total[batch_index])
+                if independent_sampling_active:
+                    for batch_index in range(group_batch):
+                        group_pairs = {
+                            (int(template_ids[view_index][batch_index]),
+                             int(search_ids[view_index][batch_index]))
+                            for view_index in range(num_views)
+                        }
+                        if len(group_pairs) > 1:
+                            independent_groups_with_distinct_frames += 1
                 multiview_groups += group_batch
             paired_training = bool(
                 loader.training
@@ -218,6 +282,52 @@ class LTRTrainer(BaseTrainer):
             if max_iterations > 0 and i >= max_iterations:
                 break
 
+        if independent_sampling_active and dist.is_available() and dist.is_initialized():
+            local_diagnostics = {
+                "multiview_counts": dict(multiview_counts),
+                "target_view_counts": dict(target_view_counts),
+                "multiview_groups": multiview_groups,
+                "manifest_rows": independent_manifest_rows,
+                "delta_t_by_view": dict(delta_t_by_view),
+                "unique_pairs_by_view": {
+                    key: list(value) for key, value in unique_pairs_by_view.items()
+                },
+                "visibility_coverage": visibility_coverage,
+                "groups_with_distinct_frames": independent_groups_with_distinct_frames,
+                "causal_violations": causal_violations,
+                "visibility_violations": visibility_violations,
+            }
+            gathered = [None for _ in range(dist.get_world_size())]
+            dist.all_gather_object(gathered, local_diagnostics)
+            if dist.get_rank() == 0:
+                multiview_counts = Counter()
+                target_view_counts = Counter()
+                multiview_groups = 0
+                independent_manifest_rows = []
+                delta_t_by_view = defaultdict(list)
+                unique_pairs_by_view = defaultdict(set)
+                visibility_coverage = {}
+                independent_groups_with_distinct_frames = 0
+                causal_violations = 0
+                visibility_violations = 0
+                for item in gathered:
+                    multiview_counts.update(item["multiview_counts"])
+                    target_view_counts.update(item["target_view_counts"])
+                    multiview_groups += item["multiview_groups"]
+                    independent_manifest_rows.extend(item["manifest_rows"])
+                    for view_label, values in item["delta_t_by_view"].items():
+                        delta_t_by_view[view_label].extend(values)
+                    for view_label, values in item["unique_pairs_by_view"].items():
+                        unique_pairs_by_view[view_label].update(
+                            tuple(value) for value in values)
+                    visibility_coverage.update(item["visibility_coverage"])
+                    independent_groups_with_distinct_frames += item[
+                        "groups_with_distinct_frames"]
+                    causal_violations += item["causal_violations"]
+                    visibility_violations += item["visibility_violations"]
+            else:
+                multiview_counts.clear()
+
         if multiview_counts:
             payload = {
                 "loader": loader.name,
@@ -230,23 +340,61 @@ class LTRTrainer(BaseTrainer):
                     for key, value in sorted(target_view_counts.items())
                 },
             }
+            if independent_sampling_active:
+                frame_stats = {}
+                for view_label, values in sorted(delta_t_by_view.items()):
+                    ordered = sorted(values)
+                    count = len(ordered)
+                    p90_index = int(round(0.9 * (count - 1))) if count else 0
+                    median = (
+                        ordered[count // 2] if count % 2 == 1 else
+                        (ordered[count // 2 - 1] + ordered[count // 2]) / 2.0
+                    ) if count else 0.0
+                    frame_stats[view_label] = {
+                        "delta_t_mean": float(sum(ordered) / count) if count else 0.0,
+                        "delta_t_median": float(median),
+                        "delta_t_p90": float(ordered[p90_index]) if count else 0.0,
+                        "unique_pair_count": len(unique_pairs_by_view[view_label]),
+                        "unique_pair_ratio": float(
+                            len(unique_pairs_by_view[view_label]) / count)
+                        if count else 0.0,
+                    }
+                payload["independent_view_sampling"] = True
+                payload["frame_sampling"] = frame_stats
+                payload["groups_with_distinct_view_frames"] = int(
+                    independent_groups_with_distinct_frames)
+                payload["distinct_view_frame_ratio"] = float(
+                    independent_groups_with_distinct_frames / multiview_groups)
+                payload["causal_violations"] = int(causal_violations)
+                payload["visibility_violations"] = int(visibility_violations)
+                payload["visibility_coverage"] = visibility_coverage
             line = "[MultiviewEpoch] " + json.dumps(
                 payload, sort_keys=True, ensure_ascii=True)
             print(line)
             if self.settings.local_rank in [-1, 0]:
                 with open(self.settings.log_file, "a") as log_file:
                     log_file.write(line + "\n")
-                if validation_manifest_rows:
+                manifest_rows = (
+                    independent_manifest_rows
+                    if independent_sampling_active else validation_manifest_rows)
+                if manifest_rows:
+                    manifest_prefix = (
+                        "%s_sampling" % loader.name
+                        if independent_sampling_active else "validation_sampling")
                     manifest_path = os.path.join(
                         os.path.dirname(self.settings.log_file),
-                        "validation_sampling_epoch_%04d.jsonl" % self.epoch,
+                        "%s_epoch_%04d.jsonl" % (manifest_prefix, self.epoch),
                     )
                     with open(manifest_path, "w") as manifest_file:
-                        for row in validation_manifest_rows:
+                        for row in manifest_rows:
                             manifest_file.write(json.dumps(
                                 row, sort_keys=True, ensure_ascii=True) + "\n")
-                    manifest_line = "[ValidationManifest] path=%s rows=%d" % (
-                        manifest_path, len(validation_manifest_rows))
+                    manifest_tag = (
+                        "SamplingManifest" if independent_sampling_active
+                        else "ValidationManifest")
+                    manifest_line = "[%s] path=%s rows=%d" % (
+                        manifest_tag,
+                        manifest_path, len(manifest_rows))
                     print(manifest_line)
                     with open(self.settings.log_file, "a") as log_file:
                         log_file.write(manifest_line + "\n")

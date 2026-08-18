@@ -1,0 +1,11 @@
+BASE_CONFIG: b0_abc_plain_ind_sampler_4gpu
+EXPERIMENT_NAME: B0-ABC-Plain-IndSampler-Long
+
+TRAIN:
+  TOTAL_EPOCH: 50
+  EPOCH: 50
+
+TEST:
+  SAVE_DIR: output/diagnostics/b0_abc_plain_ind_sampler_long
+  CHECKPOINT_NAME: b0_abc_plain_ind_sampler_4gpu_ep50
+  EPOCH: 50

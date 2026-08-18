@@ -1381,6 +1381,52 @@ class PCUMShapeTest(unittest.TestCase):
         self.assertTrue(bool(data["template_view_valid"].all()))
         self.assertTrue(bool(data["search_view_valid"].all()))
 
+    def test_threemdot_sampler_independent_view_sampling(self):
+        dataset = FakeThreeMDOTDataset()
+        dataset.visible = [
+            torch.tensor([False, True, True, False, False, False, False]),
+            torch.tensor([False, False, False, True, True, False, False]),
+            torch.tensor([False, False, False, False, False, True, True]),
+        ]
+        sampler = TrackingSamplerThreeMDOT(
+            datasets=[dataset],
+            p_datasets=None,
+            samples_per_epoch=1,
+            max_gap=2,
+            num_search_frames=1,
+            num_template_frames=1,
+            processing=mark_valid,
+            frame_sample_mode="causal",
+            independent_view_sampling=True,
+            canonical_view_order=True,
+            max_retry=50,
+        )
+
+        data = sampler[0]
+        self.assertEqual(data["target_id"], "md0001")
+        self.assertEqual(data["view_ids"], ["A", "B", "C"])
+        self.assertEqual(data["template_frame_ids"], [1, 3, 5])
+        self.assertEqual(data["search_frame_ids"], [2, 4, 6])
+        self.assertTrue(bool(data["template_view_valid"].all()))
+        self.assertTrue(bool(data["search_view_valid"].all()))
+        self.assertTrue(all(
+            search > template for template, search in zip(
+                data["template_frame_ids"], data["search_frame_ids"])))
+        self.assertEqual(data["common_visible_frame_count"], 0)
+
+    def test_independent_view_sampling_rejects_common_visibility(self):
+        with self.assertRaises(ValueError):
+            TrackingSamplerThreeMDOT(
+                datasets=[FakeThreeMDOTDataset()],
+                p_datasets=None,
+                samples_per_epoch=1,
+                max_gap=2,
+                num_search_frames=1,
+                num_template_frames=1,
+                independent_view_sampling=True,
+                require_all_views_visible=True,
+            )
+
     def test_pcum_motion_reliability_ignores_visibility_annotation(self):
         stable = {
             "prev_bbox": [100.0, 100.0, 40.0, 40.0],

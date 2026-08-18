@@ -1,0 +1,12 @@
+[VERIFIED] config=b0_abc_plain_4gpu_ep50 dataset=threemdot_val runid=28125 bbox=15/15 source=none no_gt=true checkpoint=epoch=25,pcum_keys=0
+[VERIFIED] config=b0_abc_plain_4gpu_ep50 dataset=threemdot_val runid=28130 bbox=15/15 source=none no_gt=true checkpoint=epoch=30,pcum_keys=0
+[VERIFIED] config=b0_abc_plain_4gpu_ep50 dataset=threemdot_val runid=28135 bbox=15/15 source=none no_gt=true checkpoint=epoch=35,pcum_keys=0
+[VERIFIED] config=b0_abc_plain_4gpu_ep50 dataset=threemdot_val runid=28140 bbox=15/15 source=none no_gt=true checkpoint=epoch=40,pcum_keys=0
+[VERIFIED] config=b0_abc_plain_4gpu_ep50 dataset=threemdot_val runid=28145 bbox=15/15 source=none no_gt=true checkpoint=epoch=45,pcum_keys=0
+[VERIFIED] config=b0_abc_plain_4gpu_ep50 dataset=threemdot_val runid=28150 bbox=15/15 source=none no_gt=true checkpoint=epoch=50,pcum_keys=0
+[VERIFIED] config=b0_abc_plain_ind_sampler_4gpu dataset=threemdot_val runid=28225 bbox=15/15 source=none no_gt=true checkpoint=epoch=25,pcum_keys=0
+[VERIFIED] config=b0_abc_plain_ind_sampler_4gpu_ep50 dataset=threemdot_val runid=28330 bbox=15/15 source=none no_gt=true checkpoint=epoch=30,pcum_keys=0
+[VERIFIED] config=b0_abc_plain_ind_sampler_4gpu_ep50 dataset=threemdot_val runid=28335 bbox=15/15 source=none no_gt=true checkpoint=epoch=35,pcum_keys=0
+[VERIFIED] config=b0_abc_plain_ind_sampler_4gpu_ep50 dataset=threemdot_val runid=28340 bbox=15/15 source=none no_gt=true checkpoint=epoch=40,pcum_keys=0
+[VERIFIED] config=b0_abc_plain_ind_sampler_4gpu_ep50 dataset=threemdot_val runid=28345 bbox=15/15 source=none no_gt=true checkpoint=epoch=45,pcum_keys=0
+[VERIFIED] config=b0_abc_plain_ind_sampler_4gpu_ep50 dataset=threemdot_val runid=28350 bbox=15/15 source=none no_gt=true checkpoint=epoch=50,pcum_keys=0

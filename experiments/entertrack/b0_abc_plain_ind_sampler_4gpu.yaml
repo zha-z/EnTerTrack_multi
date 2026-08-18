@@ -1,0 +1,12 @@
+BASE_CONFIG: b0_abc_plain_4gpu
+EXPERIMENT_NAME: B0-ABC-Plain-IndSampler
+
+TRAIN:
+  MULTIVIEW:
+    REQUIRE_ALL_VIEWS_VISIBLE: false
+    INDEPENDENT_VIEW_SAMPLING: true
+
+TEST:
+  SAVE_DIR: output/diagnostics/b0_abc_plain_ind_sampler
+  CHECKPOINT_NAME: b0_abc_plain_ind_sampler_4gpu
+  EPOCH: 25

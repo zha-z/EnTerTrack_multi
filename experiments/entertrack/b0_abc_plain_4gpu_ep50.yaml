@@ -1,0 +1,11 @@
+BASE_CONFIG: b0_abc_plain_4gpu
+EXPERIMENT_NAME: B0-ABC-Plain-Long
+
+TRAIN:
+  TOTAL_EPOCH: 50
+  EPOCH: 50
+
+TEST:
+  SAVE_DIR: output/diagnostics/b0_abc_plain_long
+  CHECKPOINT_NAME: b0_abc_plain_4gpu_ep50
+  EPOCH: 50

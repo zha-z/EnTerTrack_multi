@@ -24,7 +24,8 @@ class TrackingSamplerThreeMDOT(torch.utils.data.Dataset):
     def __init__(self, datasets, p_datasets, samples_per_epoch, max_gap,
                  num_search_frames, num_template_frames=1, processing=no_processing, frame_sample_mode='causal',
                  train_cls=False, pos_prob=0.5, require_all_views_visible=False,
-                 canonical_view_order=False, max_retry=500, debug_exceptions=False):
+                 canonical_view_order=False, independent_view_sampling=False,
+                 max_retry=500, debug_exceptions=False):
         """
         args:
             datasets - List of datasets to be used for training
@@ -57,8 +58,19 @@ class TrackingSamplerThreeMDOT(torch.utils.data.Dataset):
         self.frame_sample_mode = frame_sample_mode
         self.require_all_views_visible = bool(require_all_views_visible)
         self.canonical_view_order = bool(canonical_view_order)
+        self.independent_view_sampling = bool(independent_view_sampling)
         self.max_retry = int(max_retry)
         self.debug_exceptions = bool(debug_exceptions)
+        if self.independent_view_sampling:
+            if self.require_all_views_visible:
+                raise ValueError(
+                    "independent-view sampling is incompatible with common visibility")
+            if self.frame_sample_mode != "causal":
+                raise ValueError(
+                    "independent-view sampling currently requires causal mode")
+            if self.num_template_frames != 1 or self.num_search_frames != 1:
+                raise ValueError(
+                    "independent-view sampling requires one template and one search frame")
 
     def __len__(self):
         return self.samples_per_epoch
@@ -120,6 +132,43 @@ class TrackingSamplerThreeMDOT(torch.utils.data.Dataset):
         for visible in visible_list[1:]:
             common = common & torch.as_tensor(visible[:min_len]).bool()
         return common
+
+    def _sample_independent_causal_ids(self, visible):
+        """Apply the existing causal rule to one view's own visibility."""
+        template_frame_ids = None
+        search_frame_ids = None
+        gap_increase = 0
+        attempts = 0
+        while search_frame_ids is None:
+            attempts += 1
+            if attempts > 100:
+                return None, None
+            base_frame_id = self._sample_visible_ids(
+                visible,
+                num_ids=1,
+                min_id=self.num_template_frames - 1,
+                max_id=len(visible) - self.num_search_frames,
+            )
+            if base_frame_id is None:
+                return None, None
+            prev_frame_ids = self._sample_visible_ids(
+                visible,
+                num_ids=self.num_template_frames - 1,
+                min_id=base_frame_id[0] - self.max_gap - gap_increase,
+                max_id=base_frame_id[0],
+            )
+            if prev_frame_ids is None:
+                gap_increase += 5
+                continue
+            template_frame_ids = base_frame_id + prev_frame_ids
+            search_frame_ids = self._sample_visible_ids(
+                visible,
+                min_id=template_frame_ids[0] + 1,
+                max_id=template_frame_ids[0] + self.max_gap + gap_increase,
+                num_ids=self.num_search_frames,
+            )
+            gap_increase += 5
+        return template_frame_ids, search_frame_ids
 
     def _view_visible_flags(self, visible_list, frame_ids):
         flags = []
@@ -209,8 +258,12 @@ class TrackingSamplerThreeMDOT(torch.utils.data.Dataset):
                     rest_visible_list,
                 )
 
-            if self.require_all_views_visible and len(rest_visible_list) < 2:
+            if ((self.require_all_views_visible or self.independent_view_sampling)
+                    and len(rest_visible_list) < 2):
                 continue
+
+            all_visible = [visible] + list(rest_visible_list)
+            all_seq_ids = [seq_id] + list(rest_seq_id_list)
 
             visible_for_sampling = visible
             valid_for_sampling = seq_info_dict.get("valid", visible)
@@ -221,7 +274,21 @@ class TrackingSamplerThreeMDOT(torch.utils.data.Dataset):
                 visible_for_sampling = common_visible
                 valid_for_sampling = common_visible
 
-            if is_video_dataset:
+            template_frame_ids_by_view = None
+            search_frame_ids_by_view = None
+            if is_video_dataset and self.independent_view_sampling:
+                sampled_pairs = [
+                    self._sample_independent_causal_ids(view_visible)
+                    for view_visible in all_visible
+                ]
+                if any(template_ids is None or search_ids is None
+                       for template_ids, search_ids in sampled_pairs):
+                    continue
+                template_frame_ids_by_view = [item[0] for item in sampled_pairs]
+                search_frame_ids_by_view = [item[1] for item in sampled_pairs]
+                template_frame_ids = template_frame_ids_by_view[0]
+                search_frame_ids = search_frame_ids_by_view[0]
+            elif is_video_dataset:
                 template_frame_ids = None
                 search_frame_ids = None
                 gap_increase = 0
@@ -260,14 +327,24 @@ class TrackingSamplerThreeMDOT(torch.utils.data.Dataset):
                 template_frame_ids = [1] * self.num_template_frames
                 search_frame_ids = [1] * self.num_search_frames
 
-            template_view_valid = self._view_visible_flags([visible] + rest_visible_list, template_frame_ids)
-            search_view_valid = self._view_visible_flags([visible] + rest_visible_list, search_frame_ids)
+            if self.independent_view_sampling:
+                template_view_valid = torch.tensor([
+                    self._ids_visible(view_visible, template_frame_ids_by_view[index])
+                    for index, view_visible in enumerate(all_visible)
+                ], dtype=torch.bool)
+                search_view_valid = torch.tensor([
+                    self._ids_visible(view_visible, search_frame_ids_by_view[index])
+                    for index, view_visible in enumerate(all_visible)
+                ], dtype=torch.bool)
+            else:
+                template_view_valid = self._view_visible_flags(all_visible, template_frame_ids)
+                search_view_valid = self._view_visible_flags(all_visible, search_frame_ids)
             if self.require_all_views_visible:
                 if not bool(template_view_valid.all()) or not bool(search_view_valid.all()):
                     continue
 
             try:
-                sequence_ids = [seq_id] + list(rest_seq_id_list)
+                sequence_ids = all_seq_ids
                 target_view_pairs = [
                     self._target_and_view(dataset.sequence_list[item])
                     for item in sequence_ids
@@ -277,15 +354,30 @@ class TrackingSamplerThreeMDOT(torch.utils.data.Dataset):
                     raise RuntimeError(
                         "ThreeMDOT group mixes target ids: %s" %
                         sorted(target_ids))
-                template_frames, template_anno, meta_obj_train = dataset.get_frames(seq_id, template_frame_ids, seq_info_dict)
-                search_frames, search_anno, meta_obj_test = dataset.get_frames(seq_id, search_frame_ids, seq_info_dict)
+                first_template_ids = (
+                    template_frame_ids_by_view[0]
+                    if self.independent_view_sampling else template_frame_ids)
+                first_search_ids = (
+                    search_frame_ids_by_view[0]
+                    if self.independent_view_sampling else search_frame_ids)
+                template_frames, template_anno, meta_obj_train = dataset.get_frames(
+                    seq_id, first_template_ids, seq_info_dict)
+                search_frames, search_anno, meta_obj_test = dataset.get_frames(
+                    seq_id, first_search_ids, seq_info_dict)
 
                 for i in range(0, len(rest_seq_id_list)):    # 三个模板加到一起
-                    tmp_template_frames, tmp_template_anno, tmp_meta_obj_train = dataset.get_frames(rest_seq_id_list[i], template_frame_ids, rest_seq_info_dict_list[i])
+                    view_index = i + 1
+                    tmp_template_ids = (
+                        template_frame_ids_by_view[view_index]
+                        if self.independent_view_sampling else template_frame_ids)
+                    tmp_search_ids = (
+                        search_frame_ids_by_view[view_index]
+                        if self.independent_view_sampling else search_frame_ids)
+                    tmp_template_frames, tmp_template_anno, tmp_meta_obj_train = dataset.get_frames(rest_seq_id_list[i], tmp_template_ids, rest_seq_info_dict_list[i])
                     template_frames = template_frames + tmp_template_frames
                     template_anno['bbox'] = template_anno['bbox'] + tmp_template_anno['bbox']
                     tmp_search_frames, tmp_search_anno, _ = dataset.get_frames(
-                        rest_seq_id_list[i], search_frame_ids, rest_seq_info_dict_list[i])
+                        rest_seq_id_list[i], tmp_search_ids, rest_seq_info_dict_list[i])
                     search_frames = search_frames + tmp_search_frames
                     search_anno['bbox'] = search_anno['bbox'] + tmp_search_anno['bbox']
 
@@ -294,6 +386,13 @@ class TrackingSamplerThreeMDOT(torch.utils.data.Dataset):
                 template_masks = template_anno['mask'] if 'mask' in template_anno else [torch.zeros((H, W))] * self.num_template_frames*3      # 双机翻两倍
                 search_masks = search_anno['mask'] if 'mask' in search_anno else [torch.zeros((H, W))] * self.num_search_frames*3
 
+                common_visible = self._common_visible(all_visible)
+                metadata_template_ids = (
+                    [int(item[0]) for item in template_frame_ids_by_view]
+                    if self.independent_view_sampling else list(template_frame_ids))
+                metadata_search_ids = (
+                    [int(item[0]) for item in search_frame_ids_by_view]
+                    if self.independent_view_sampling else list(search_frame_ids))
                 data = TensorDict({'template_images': template_frames,
                                    'template_anno': template_anno['bbox'],
                                    'template_masks': template_masks,
@@ -304,8 +403,18 @@ class TrackingSamplerThreeMDOT(torch.utils.data.Dataset):
                                    'search_view_valid': search_view_valid,
                                    'target_id': target_view_pairs[0][0],
                                    'view_ids': [item[1] for item in target_view_pairs],
-                                   'template_frame_ids': list(template_frame_ids),
-                                   'search_frame_ids': list(search_frame_ids),
+                                   'template_frame_ids': metadata_template_ids,
+                                   'search_frame_ids': metadata_search_ids,
+                                   'independent_view_sampling': self.independent_view_sampling,
+                                   'view_visible_frame_counts': [
+                                       int(torch.as_tensor(item).bool().sum().item())
+                                       for item in all_visible
+                                   ],
+                                   'view_total_frame_counts': [len(item) for item in all_visible],
+                                   'common_visible_frame_count': int(
+                                       common_visible.sum().item()) if common_visible is not None else 0,
+                                   'common_visible_total_frames': int(
+                                       len(common_visible)) if common_visible is not None else 0,
                                    'dataset': dataset.get_name(),
                                    'test_class': meta_obj_test.get('object_class_name')})
                 # make data augmentation

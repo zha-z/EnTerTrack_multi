@@ -1,0 +1,20 @@
+{
+  "common_visible_ep25": {
+    "network_state_sha256": "a37d8450ced849e5e9b3c1d2e05b59369189f8dad3936e3d11d9a0407aa44d5f",
+    "E0_checkpoint": "output/diagnostics/b0_abc_plain/run_20260818_seed42_4gpu_r001/checkpoints/train/entertrack/b0_abc_plain_4gpu/EnTeRTrack_ep0025.pth.tar",
+    "E1_checkpoint": "output/diagnostics/b0_abc_plain_long/e1_run_20260818_seed42_4gpu_r002/checkpoints/train/entertrack/b0_abc_plain_4gpu_ep50/EnTeRTrack_ep0025.pth.tar",
+    "equal": true
+  },
+  "independent_view_ep25": {
+    "network_state_sha256": "cd5a407a203975d68a7fc323cfb16b3dae309cbaf10c736266a41f24c5010071",
+    "E2_checkpoint": "output/diagnostics/b0_abc_plain_ind_sampler/e2_run_20260818_seed42_4gpu_r001/checkpoints/train/entertrack/b0_abc_plain_ind_sampler_4gpu/EnTeRTrack_ep0025.pth.tar",
+    "E3_checkpoint": "output/diagnostics/b0_abc_plain_ind_sampler_long/e3_run_20260818_seed42_4gpu_r001/checkpoints/train/entertrack/b0_abc_plain_ind_sampler_4gpu_ep50/EnTeRTrack_ep0025.pth.tar",
+    "equal": true
+  },
+  "pretrained_checkpoint": {
+    "path": "pretrained_models/tiny_7_OSTrack_ep0300.pth.tar",
+    "sha256": "94b20f6f955d5be1f00fb5765a489377535e2be86e0f3289781ae936035c2c4c",
+    "stored_epoch": 300,
+    "source_atp_only_keys_excluded": 12
+  }
+}
