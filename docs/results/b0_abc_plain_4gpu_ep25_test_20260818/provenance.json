@@ -1,0 +1,20 @@
+{
+  "atp_key_count": 0,
+  "checkpoint_bytes": 65159882,
+  "checkpoint_epoch": 25,
+  "checkpoint_not_committed": true,
+  "checkpoint_sha256": "363fb06b05e4f0591ca1efca5b31ad38c7f5e0865048bb546dcd28dd0463edd3",
+  "config": "b0_abc_plain_4gpu",
+  "dataset": "threemdot_test",
+  "multiview_record_count": 50,
+  "network_tensor_count": 170,
+  "no_gt_inference": true,
+  "pcum_key_count": 0,
+  "remote_state_source": "none",
+  "runid": 26025,
+  "test_log_sha256": "cf497fe89b0ba5dc4ecaacdb0b6a5d9efc438b02902dd39cae9388f8b215bf07",
+  "test_sequence_count": 105,
+  "tracking_result_file_count": 420,
+  "training_epochs": 25,
+  "training_log_sha256": "371550bedce3fd15c09644e7f38a50cdb8a7746eb6dd6d8562eb575bdf013352"
+}

@@ -189,4 +189,6 @@ def main(argv=None):
     parser.add_argument("--compare_param", default=None)
     parser.add_argument("--output_dir", default=None)
     args = parser.parse_args(argv)
-    return analyze(**vars(args))
+    arguments = vars(args)
+    arguments["run_id"] = arguments.pop("runid")
+    return analyze(**arguments)

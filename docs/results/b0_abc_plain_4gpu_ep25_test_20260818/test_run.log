@@ -1,0 +1,979 @@
+Evaluating    1 trackers on   105 sequences
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3001-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3006-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3003-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3009-1
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3011-1
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3021-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3014-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3023-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+/home/user/.conda/envs/zjy/lib/python3.8/site-packages/timm/models/layers/__init__.py:49: FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.layers", FutureWarning)
+/data/zjy/EnTeR-Track-main/lib/test/tracker/entertrack.py:653: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  checkpoint = torch.load(checkpoint_path, map_location="cpu")
+/home/user/.conda/envs/zjy/lib/python3.8/site-packages/timm/models/layers/__init__.py:49: FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.layers", FutureWarning)
+/data/zjy/EnTeR-Track-main/lib/test/tracker/entertrack.py:653: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  checkpoint = torch.load(checkpoint_path, map_location="cpu")
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+/home/user/.conda/envs/zjy/lib/python3.8/site-packages/timm/models/layers/__init__.py:49: FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.layers", FutureWarning)
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+/data/zjy/EnTeR-Track-main/lib/test/tracker/entertrack.py:653: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  checkpoint = torch.load(checkpoint_path, map_location="cpu")
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+/home/user/.conda/envs/zjy/lib/python3.8/site-packages/timm/models/layers/__init__.py:49: FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.layers", FutureWarning)
+/home/user/.conda/envs/zjy/lib/python3.8/site-packages/timm/models/layers/__init__.py:49: FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.layers", FutureWarning)
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+/home/user/.conda/envs/zjy/lib/python3.8/site-packages/timm/models/layers/__init__.py:49: FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.layers", FutureWarning)
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3001-1
+/home/user/.conda/envs/zjy/lib/python3.8/site-packages/timm/models/layers/__init__.py:49: FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.layers", FutureWarning)
+/data/zjy/EnTeR-Track-main/lib/test/tracker/entertrack.py:653: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  checkpoint = torch.load(checkpoint_path, map_location="cpu")
+/data/zjy/EnTeR-Track-main/lib/test/tracker/entertrack.py:653: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  checkpoint = torch.load(checkpoint_path, map_location="cpu")
+/data/zjy/EnTeR-Track-main/lib/test/tracker/entertrack.py:653: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  checkpoint = torch.load(checkpoint_path, map_location="cpu")
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3006-1
+/data/zjy/EnTeR-Track-main/lib/test/tracker/entertrack.py:653: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  checkpoint = torch.load(checkpoint_path, map_location="cpu")
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+/home/user/.conda/envs/zjy/lib/python3.8/site-packages/timm/models/layers/__init__.py:49: FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.layers", FutureWarning)
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3003-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+/data/zjy/EnTeR-Track-main/lib/test/tracker/entertrack.py:653: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  checkpoint = torch.load(checkpoint_path, map_location="cpu")
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3011-1
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3021-1
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3014-1
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3009-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3023-1
+FPS: 154.92441748956603
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3004-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3004-1
+FPS: 167.3601367081614
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3007-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3007-1
+FPS: 208.77915751860795
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3022-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3022-1
+FPS: 199.62132379053838
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3024-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3024-1
+FPS: 180.34861176566116
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3015-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3015-1
+FPS: 180.05623471333985
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3012-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3012-1
+FPS: 256.69508291383534
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3025-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3025-1
+FPS: 195.69850587135085
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3010-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3010-1
+FPS: 247.92096044026246
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3028-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3028-1
+FPS: 210.29591080580656
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3002-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3002-1
+FPS: 228.7124548165025
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+FPS: 247.60083147293767
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3029-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3037-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3037-1
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3029-1
+FPS: 243.92012843786728
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3041-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3041-1
+FPS: 199.57143201975853
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3043-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3043-1
+FPS: 250.14173403740554
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3042-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3042-1
+FPS: 240.55106389808492
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3046-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3046-1
+FPS: 200.8482293081875
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3049-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+FPS: 262.8694406021208
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3053-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3049-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3053-1
+FPS: 239.98709890870845
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3039-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3039-1
+FPS: 235.75766491788485
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3057-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3057-1
+FPS: 254.23547673658933
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3047-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3047-1
+FPS: 220.13396686158498
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3063-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3063-1
+FPS: 218.8582888040647
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3033-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3033-1
+FPS: 241.83932169967164
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3061-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3061-1
+FPS: 247.7843194602178
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3052-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3052-1
+FPS: 251.68946794783582
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+FPS: 234.09001606650216
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+FPS: 263.7393254687187
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3056-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3056-1
+FPS: 245.65116821616465
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+FPS: 217.90648773245405
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+Tracker: entertrack b0_abc_plain_4gpu 26025 ,  Sequence: md3045-1
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_4gpu
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3045-1
+FPS: 239.87793418651287
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+FPS: 249.9264306335529
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+FPS: 257.2532621533449
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+FPS: 259.2479688619903
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+FPS: 263.259359650507
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+Done

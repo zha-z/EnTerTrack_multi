@@ -1,0 +1,263 @@
+{
+  "bootstrap_auc_95ci": [
+    0.4910658374590438,
+    0.597588510460106
+  ],
+  "comparison": {
+    "harmful_sequences": [],
+    "matched_sequences": 0,
+    "mean_auc_delta": NaN,
+    "reference": null
+  },
+  "dataset_name": "threemdot_test",
+  "overall": {
+    "auc": 0.5430281356126827,
+    "mean_iou": 0.5378504230074744,
+    "normalized_precision": 0.6303277283656725,
+    "precision": 0.6995827386003315
+  },
+  "per_target": {
+    "md3001": {
+      "auc": 0.5799428328163959,
+      "mean_iou": 0.5801234728729289,
+      "normalized_precision": 0.5881226053639846,
+      "precision": 0.832481907194551
+    },
+    "md3002": {
+      "auc": 0.6117330016583749,
+      "mean_iou": 0.6103583002827727,
+      "normalized_precision": 0.7213930348258706,
+      "precision": 0.7251243781094527
+    },
+    "md3003": {
+      "auc": 0.2461507936507937,
+      "mean_iou": 0.2208409971398876,
+      "normalized_precision": 0.2358333333333333,
+      "precision": 0.18416666666666667
+    },
+    "md3004": {
+      "auc": 0.35107263107263104,
+      "mean_iou": 0.3298640015042899,
+      "normalized_precision": 0.4016161616161616,
+      "precision": 0.4448484848484848
+    },
+    "md3006": {
+      "auc": 0.22500496919101573,
+      "mean_iou": 0.19168464450528624,
+      "normalized_precision": 0.22242098986285033,
+      "precision": 0.23971377459749552
+    },
+    "md3007": {
+      "auc": 0.19141457518211025,
+      "mean_iou": 0.15654617617447095,
+      "normalized_precision": 0.19772879091516368,
+      "precision": 0.21309285237140949
+    },
+    "md3009": {
+      "auc": 0.3027936507936508,
+      "mean_iou": 0.27791385699920385,
+      "normalized_precision": 0.33039999999999997,
+      "precision": 0.4117333333333333
+    },
+    "md3010": {
+      "auc": 0.20330042586140143,
+      "mean_iou": 0.17055581427101818,
+      "normalized_precision": 0.1991869918699187,
+      "precision": 0.22594850948509485
+    },
+    "md3011": {
+      "auc": 0.16332972582972582,
+      "mean_iou": 0.12563608603166335,
+      "normalized_precision": 0.13749999999999998,
+      "precision": 0.17500000000000002
+    },
+    "md3012": {
+      "auc": 0.8574379729758217,
+      "mean_iou": 0.8741635067399739,
+      "normalized_precision": 1.0,
+      "precision": 1.0
+    },
+    "md3014": {
+      "auc": 0.7370733701205804,
+      "mean_iou": 0.7474453681142377,
+      "normalized_precision": 0.9170243204577968,
+      "precision": 0.9989270386266095
+    },
+    "md3015": {
+      "auc": 0.7825130640664621,
+      "mean_iou": 0.796313389921471,
+      "normalized_precision": 0.9970579582230067,
+      "precision": 1.0
+    },
+    "md3021": {
+      "auc": 0.6216656045031331,
+      "mean_iou": 0.62294032856892,
+      "normalized_precision": 0.7754124001263589,
+      "precision": 0.8158934886623673
+    },
+    "md3022": {
+      "auc": 0.7820046370608168,
+      "mean_iou": 0.7956524071408948,
+      "normalized_precision": 0.9891385767790263,
+      "precision": 1.0
+    },
+    "md3023": {
+      "auc": 0.6957267623206489,
+      "mean_iou": 0.7046714997687448,
+      "normalized_precision": 0.9843522561863173,
+      "precision": 1.0
+    },
+    "md3024": {
+      "auc": 0.8632699561529477,
+      "mean_iou": 0.8812937103816002,
+      "normalized_precision": 0.9951749095295538,
+      "precision": 1.0
+    },
+    "md3025": {
+      "auc": 0.8111111111111112,
+      "mean_iou": 0.8258047805154461,
+      "normalized_precision": 0.9826666666666667,
+      "precision": 0.9893333333333333
+    },
+    "md3028": {
+      "auc": 0.6904980541344178,
+      "mean_iou": 0.6988924713275958,
+      "normalized_precision": 0.8686868686868686,
+      "precision": 0.9608203244566881
+    },
+    "md3029": {
+      "auc": 0.8471645919778701,
+      "mean_iou": 0.8641721136335699,
+      "normalized_precision": 1.0,
+      "precision": 1.0
+    },
+    "md3033": {
+      "auc": 0.7566027794243562,
+      "mean_iou": 0.766582660904819,
+      "normalized_precision": 0.8775933609958506,
+      "precision": 0.9287690179806362
+    },
+    "md3037": {
+      "auc": 0.4308883604658252,
+      "mean_iou": 0.4156852974259763,
+      "normalized_precision": 0.49807938540332913,
+      "precision": 0.5053350405463082
+    },
+    "md3039": {
+      "auc": 0.793991303892294,
+      "mean_iou": 0.8090440512519054,
+      "normalized_precision": 0.9521452145214521,
+      "precision": 0.9944994499449945
+    },
+    "md3041": {
+      "auc": 0.12142606779830754,
+      "mean_iou": 0.08034993230004751,
+      "normalized_precision": 0.09674027339642483,
+      "precision": 0.13459516298633017
+    },
+    "md3042": {
+      "auc": 0.0848510164299638,
+      "mean_iou": 0.0405716516823789,
+      "normalized_precision": 0.047953216374269005,
+      "precision": 0.05730994152046784
+    },
+    "md3043": {
+      "auc": 0.5547008547008546,
+      "mean_iou": 0.5570708318701922,
+      "normalized_precision": 0.5023310023310024,
+      "precision": 0.9822843822843823
+    },
+    "md3045": {
+      "auc": 0.7157582110412299,
+      "mean_iou": 0.7261573196488212,
+      "normalized_precision": 0.8878406708595388,
+      "precision": 0.990041928721174
+    },
+    "md3046": {
+      "auc": 0.7499775804860551,
+      "mean_iou": 0.7620222111641319,
+      "normalized_precision": 0.9783427495291902,
+      "precision": 1.0
+    },
+    "md3047": {
+      "auc": 0.5547974046214338,
+      "mean_iou": 0.5522538768863118,
+      "normalized_precision": 0.6260939590452411,
+      "precision": 0.6394827963311717
+    },
+    "md3049": {
+      "auc": 0.22456851348228732,
+      "mean_iou": 0.1921044073738721,
+      "normalized_precision": 0.22956326987681971,
+      "precision": 0.2545726017170586
+    },
+    "md3052": {
+      "auc": 0.5110450881681384,
+      "mean_iou": 0.5031759127540928,
+      "normalized_precision": 0.5655690352397458,
+      "precision": 0.683419988445985
+    },
+    "md3053": {
+      "auc": 0.5190804391932211,
+      "mean_iou": 0.5195107023805635,
+      "normalized_precision": 0.3511904761904762,
+      "precision": 0.9921679197994987
+    },
+    "md3056": {
+      "auc": 0.553900087642419,
+      "mean_iou": 0.547751376461807,
+      "normalized_precision": 0.6286298568507157,
+      "precision": 0.6290388548057259
+    },
+    "md3057": {
+      "auc": 0.5574270661319494,
+      "mean_iou": 0.5535895076826035,
+      "normalized_precision": 0.6602500589761736,
+      "precision": 0.7293426122513171
+    },
+    "md3061": {
+      "auc": 0.5494765281999325,
+      "mean_iou": 0.547118624284236,
+      "normalized_precision": 0.7333333333333333,
+      "precision": 0.8184397163120568
+    },
+    "md3063": {
+      "auc": 0.7642857142857142,
+      "mean_iou": 0.7769035152958693,
+      "normalized_precision": 0.8820987654320988,
+      "precision": 0.9290123456790124
+    }
+  },
+  "per_view": {
+    "A": {
+      "auc": 0.5316280897391055,
+      "mean_iou": 0.5260407872519772,
+      "normalized_precision": 0.6334355104108284,
+      "precision": 0.702450040884438
+    },
+    "B": {
+      "auc": 0.5310891076052767,
+      "mean_iou": 0.5247350362311718,
+      "normalized_precision": 0.5967342086331353,
+      "precision": 0.6847465767110941
+    },
+    "C": {
+      "auc": 0.5663672094936654,
+      "mean_iou": 0.5627754455392739,
+      "normalized_precision": 0.660813466053054,
+      "precision": 0.7115515982054627
+    }
+  },
+  "runtime": {
+    "fps": 234.9322935327942,
+    "frame_count": 83349,
+    "mean_seconds": 0.004256545513443472
+  },
+  "sequence_count": 105,
+  "state_identity": {
+    "digest_count": 0,
+    "digest_sha256": null
+  },
+  "tracker_name": "entertrack",
+  "tracker_param": "b0_abc_plain_4gpu"
+}
