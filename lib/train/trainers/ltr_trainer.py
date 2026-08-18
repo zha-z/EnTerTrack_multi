@@ -1,7 +1,8 @@
 import os
 import datetime
+import json
 from contextlib import nullcontext
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 
 from lib.train.data.wandb_logger import WandbWriter
 from lib.train.trainers import BaseTrainer
@@ -84,6 +85,10 @@ class LTRTrainer(BaseTrainer):
         #             #print(name)
 
         self._init_timing()
+        multiview_counts = Counter()
+        target_view_counts = Counter()
+        multiview_groups = 0
+        validation_manifest_rows = []
 
         for i, data in enumerate(loader, 1):
             self.data_read_done_time = time.time()
@@ -95,6 +100,44 @@ class LTRTrainer(BaseTrainer):
 
             data['epoch'] = self.epoch
             data['settings'] = self.settings
+            actor_cfg = getattr(self.actor, "cfg", None)
+            diagnostics_enabled = bool(getattr(
+                getattr(getattr(actor_cfg, "TRAIN", None), "MULTIVIEW", None),
+                "DIAGNOSTICS_ENABLED", False))
+            if diagnostics_enabled:
+                images = data.get("template_images", None)
+                if not torch.is_tensor(images) or images.dim() != 5:
+                    raise RuntimeError(
+                        "Multiview diagnostics expected [V,B,C,H,W] images")
+                num_views, group_batch = int(images.shape[0]), int(images.shape[1])
+                view_ids = data.get("view_ids", None)
+                target_ids = data.get("target_id", None)
+                if view_ids is None or target_ids is None:
+                    raise RuntimeError("Multiview target/view metadata is missing")
+                if len(view_ids) != num_views or len(target_ids) != group_batch:
+                    raise RuntimeError("Multiview metadata shape mismatch")
+                for view_index in range(num_views):
+                    labels = view_ids[view_index]
+                    for batch_index in range(group_batch):
+                        view_label = str(labels[batch_index])
+                        target_id = str(target_ids[batch_index])
+                        multiview_counts[view_label] += 1
+                        target_view_counts[(target_id, view_label)] += 1
+                        save_val_manifest = bool(getattr(
+                            getattr(actor_cfg.TRAIN, "MULTIVIEW", None),
+                            "SAVE_VAL_MANIFEST", False))
+                        if save_val_manifest and not loader.training:
+                            template_ids = data.get("template_frame_ids", [])
+                            search_ids = data.get("search_frame_ids", [])
+                            template_frame = int(template_ids[0][batch_index])
+                            search_frame = int(search_ids[0][batch_index])
+                            validation_manifest_rows.append({
+                                "target_id": target_id,
+                                "view_id": view_label,
+                                "template_frame": template_frame,
+                                "search_frame": search_frame,
+                            })
+                multiview_groups += group_batch
             paired_training = bool(
                 loader.training
                 and getattr(self.actor, "paired_supervision_enabled", False)
@@ -170,11 +213,43 @@ class LTRTrainer(BaseTrainer):
                 if self.settings.local_rank in [-1, 0]:
                     self.wandb_writer.write_log(self.stats, self.epoch)
 
-            actor_cfg = getattr(self.actor, "cfg", None)
             train_cfg = getattr(actor_cfg, "TRAIN", None)
             max_iterations = int(getattr(train_cfg, "MAX_ITERS_PER_EPOCH", 0))
             if max_iterations > 0 and i >= max_iterations:
                 break
+
+        if multiview_counts:
+            payload = {
+                "loader": loader.name,
+                "epoch": int(self.epoch),
+                "group_samples": int(multiview_groups),
+                "local_samples": int(sum(multiview_counts.values())),
+                "view_counts": dict(sorted(multiview_counts.items())),
+                "target_id_x_view": {
+                    "%s x %s" % key: int(value)
+                    for key, value in sorted(target_view_counts.items())
+                },
+            }
+            line = "[MultiviewEpoch] " + json.dumps(
+                payload, sort_keys=True, ensure_ascii=True)
+            print(line)
+            if self.settings.local_rank in [-1, 0]:
+                with open(self.settings.log_file, "a") as log_file:
+                    log_file.write(line + "\n")
+                if validation_manifest_rows:
+                    manifest_path = os.path.join(
+                        os.path.dirname(self.settings.log_file),
+                        "validation_sampling_epoch_%04d.jsonl" % self.epoch,
+                    )
+                    with open(manifest_path, "w") as manifest_file:
+                        for row in validation_manifest_rows:
+                            manifest_file.write(json.dumps(
+                                row, sort_keys=True, ensure_ascii=True) + "\n")
+                    manifest_line = "[ValidationManifest] path=%s rows=%d" % (
+                        manifest_path, len(validation_manifest_rows))
+                    print(manifest_line)
+                    with open(self.settings.log_file, "a") as log_file:
+                        log_file.write(manifest_line + "\n")
 
         # calculate ETA after every epoch
         epoch_time = self.prev_time - self.start_time

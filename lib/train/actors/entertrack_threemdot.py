@@ -87,6 +87,10 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
         out_dict = self.forward_pass(self.net, data)
 
         loss, status = self.compute_losses(out_dict, data)
+        plain_diagnostics = self._plain_multiview_diagnostics(out_dict)
+        if plain_diagnostics and not bool(torch.isfinite(loss).item()):
+            raise RuntimeError("B0-ABC-Plain produced a non-finite loss")
+        status.update(plain_diagnostics)
 
         if isinstance(out_dict, dict) and isinstance(out_dict.get("c3r", None), dict):
             diagnostics = out_dict["c3r"]
@@ -522,12 +526,92 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
 
     def _use_flat_multiview_baseline(self, data):
         return (
-            self._get_cfg_value("TRAIN.PARTIAL_ADAPTATION.ENABLED", False)
-            and self._get_cfg_value(
-                "TRAIN.PARTIAL_ADAPTATION.FLAT_MULTIVIEW_BASELINE", False)
+            (
+                self._get_cfg_value("TRAIN.MULTIVIEW.FLAT_BASELINE", False)
+                or (
+                    self._get_cfg_value(
+                        "TRAIN.PARTIAL_ADAPTATION.ENABLED", False)
+                    and self._get_cfg_value(
+                        "TRAIN.PARTIAL_ADAPTATION.FLAT_MULTIVIEW_BASELINE", False)
+                )
+            )
             and not self._get_cfg_value("MODEL.PCUM.ENABLED", False)
             and self._num_views(data) >= 3
         )
+
+    def _plain_multiview_diagnostics(self, output):
+        """Assert that the B0-ABC path is a complete, collaboration-free ViT."""
+        if not self._get_cfg_value(
+                "TRAIN.MULTIVIEW.DIAGNOSTICS_ENABLED", False):
+            return {}
+        if not output.get("pcum_flat_multiview", False):
+            raise RuntimeError("Plain multiview diagnostics require the flat path")
+
+        network = self._unwrap_network()
+        backbone_type = str(self._get_cfg_value("MODEL.BACKBONE.TYPE", ""))
+        if backbone_type != "vit_tiny_patch16_224_half":
+            raise RuntimeError(
+                "B0-ABC-Plain requires vit_tiny_patch16_224_half, got %s"
+                % backbone_type)
+        if getattr(network, "pcum", None) is not None:
+            raise RuntimeError("B0-ABC-Plain unexpectedly constructed PCUM")
+        if getattr(network, "c3r", None) is not None:
+            raise RuntimeError("B0-ABC-Plain unexpectedly constructed C3R")
+        if getattr(network, "search_prompt_gate", None) is not None:
+            raise RuntimeError("B0-ABC-Plain unexpectedly constructed a prompt gate")
+
+        backbone = getattr(network, "backbone", None)
+        if backbone is None or len(getattr(backbone, "blocks", [])) != 6:
+            raise RuntimeError("B0-ABC-Plain requires exactly six ViT blocks")
+        if getattr(backbone, "embed_dim", None) != 192:
+            raise RuntimeError("B0-ABC-Plain requires embedding dimension 192")
+        if hasattr(backbone, "ce_loc") or hasattr(backbone, "atp"):
+            raise RuntimeError("B0-ABC-Plain constructed an ARP/ATP backbone")
+
+        expected_search = (
+            int(self.cfg.DATA.SEARCH.SIZE)
+            // int(self.cfg.MODEL.BACKBONE.STRIDE)
+        ) ** 2
+        expected_template = (
+            int(self.cfg.DATA.TEMPLATE.SIZE)
+            // int(self.cfg.MODEL.BACKBONE.STRIDE)
+        ) ** 2
+        feature = output.get("backbone_feat", None)
+        if not torch.is_tensor(feature):
+            raise RuntimeError("B0-ABC-Plain backbone feature is missing")
+        if feature.shape[1] != expected_template + expected_search:
+            raise RuntimeError(
+                "Plain ViT token count mismatch: got %d, expected %d+%d"
+                % (feature.shape[1], expected_template, expected_search))
+        if int(getattr(network, "feat_len_s", -1)) != expected_search:
+            raise RuntimeError("CENTER head search-token contract is not complete")
+        if output.get("atp_masks", None) or output.get("removed_indexes_s", None):
+            raise RuntimeError("B0-ABC-Plain emitted pruning/ATP diagnostics")
+        score_map = output.get("score_map", None)
+        pred_boxes = output.get("pred_boxes", None)
+        expected_side = int(expected_search ** 0.5)
+        if (not torch.is_tensor(score_map)
+                or tuple(score_map.shape[-2:]) != (expected_side, expected_side)
+                or score_map.shape[0] != feature.shape[0]):
+            raise RuntimeError("B0-ABC-Plain CENTER score-map shape is invalid")
+        if (not torch.is_tensor(pred_boxes)
+                or pred_boxes.shape[0] != feature.shape[0]
+                or pred_boxes.shape[-1] != 4):
+            raise RuntimeError("B0-ABC-Plain CENTER bbox shape is invalid")
+
+        return {
+            "Plain/search_tokens": float(expected_search),
+            "Plain/template_tokens": float(expected_template),
+            "Plain/total_tokens": float(feature.shape[1]),
+            "Plain/transformer_blocks": float(len(backbone.blocks)),
+            "Plain/flat_multiview": 1.0,
+            "Plain/center_map_side": float(expected_side),
+            "Plain/bbox_dim": float(pred_boxes.shape[-1]),
+            "Plain/pcum_present": 0.0,
+            "Plain/c3r_present": 0.0,
+            "Plain/remote_state_present": 0.0,
+            "Plain/pruning_present": 0.0,
+        }
 
     def _squeeze_if_needed(self, value):
         """

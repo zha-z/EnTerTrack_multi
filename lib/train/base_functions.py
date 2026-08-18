@@ -292,6 +292,14 @@ def build_dataloaders_threemdot(cfg, settings):
     train_cls = getattr(cfg.TRAIN, "TRAIN_CLS", False)
     print("sampler_mode", sampler_mode)
     train_datasets = names2datasets(cfg.DATA.TRAIN.DATASETS_NAME, settings, opencv_loader)
+    multiview_cfg = getattr(cfg.TRAIN, "MULTIVIEW", None)
+    pcum_cfg = getattr(cfg.TRAIN, "PCUM", None)
+    require_all_views_visible = bool(getattr(
+        multiview_cfg, "REQUIRE_ALL_VIEWS_VISIBLE",
+        getattr(pcum_cfg, "REQUIRE_ALL_VIEWS_VISIBLE", False)))
+    canonical_view_order = bool(getattr(
+        multiview_cfg, "CANONICAL_VIEW_ORDER",
+        getattr(pcum_cfg, "CANONICAL_VIEW_ORDER", False)))
     # 如果训练集里包含了普通的单视角数据集（如 LASOT），强制使用基础的单机 Sampler
     if any(d.get_name().lower() in ['lasot', 'got10k', 'trackingnet', 'coco'] for d in train_datasets):
         print("Detected single-view dataset (e.g., LaSOT). Using standard TrackingSampler.")
@@ -309,8 +317,8 @@ def build_dataloaders_threemdot(cfg, settings):
                                                 max_gap=cfg.DATA.MAX_SAMPLE_INTERVAL, num_search_frames=settings.num_search,
                                                 num_template_frames=settings.num_template, processing=data_processing_train,
                                                 frame_sample_mode=sampler_mode, train_cls=train_cls,
-                                                require_all_views_visible=getattr(getattr(cfg.TRAIN, "PCUM", None), "REQUIRE_ALL_VIEWS_VISIBLE", False),
-                                                canonical_view_order=getattr(getattr(cfg.TRAIN, "PCUM", None), "CANONICAL_VIEW_ORDER", False))
+                                                require_all_views_visible=require_all_views_visible,
+                                                canonical_view_order=canonical_view_order)
 
     train_sampler = DistributedSampler(dataset_train) if settings.local_rank != -1 else None
     shuffle = False if settings.local_rank != -1 else True
@@ -337,8 +345,8 @@ def build_dataloaders_threemdot(cfg, settings):
                                               max_gap=cfg.DATA.MAX_SAMPLE_INTERVAL, num_search_frames=settings.num_search,
                                               num_template_frames=settings.num_template, processing=data_processing_val,
                                               frame_sample_mode=sampler_mode, train_cls=train_cls,
-                                              require_all_views_visible=getattr(getattr(cfg.TRAIN, "PCUM", None), "REQUIRE_ALL_VIEWS_VISIBLE", False),
-                                              canonical_view_order=getattr(getattr(cfg.TRAIN, "PCUM", None), "CANONICAL_VIEW_ORDER", False))
+                                              require_all_views_visible=require_all_views_visible,
+                                              canonical_view_order=canonical_view_order)
                                               
     val_sampler = DistributedSampler(dataset_val) if settings.local_rank != -1 else None
     loader_val = LTRLoader('val', dataset_val, training=False, batch_size=cfg.TRAIN.BATCH_SIZE,

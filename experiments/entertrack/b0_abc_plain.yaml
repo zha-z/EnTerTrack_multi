@@ -1,0 +1,61 @@
+BASE_CONFIG: ostrack_deit_tiny_b0_ep25
+EXPERIMENT_NAME: B0-ABC-Plain
+MODEL_ROLE: controlled_b0
+
+MODEL:
+  USE_SEARCH_PROMPT: false
+  PCUM:
+    ENABLED: false
+  C3R:
+    ENABLED: false
+  TEMPORAL_GATE:
+    ENABLED: false
+  FCVC:
+    ENABLED: false
+  BACKBONE:
+    TYPE: vit_tiny_patch16_224_half
+    PRUNING_ENABLED: false
+    DYNAMIC_THRESHOLD_ENABLED: false
+    TOKEN_COMPENSATION_ENABLED: false
+    CE_LOC: []
+    CE_KEEP_RATIO: []
+
+TRAIN:
+  MULTIVIEW:
+    ENABLED: true
+    FLAT_BASELINE: true
+    REQUIRE_ALL_VIEWS_VISIBLE: true
+    CANONICAL_VIEW_ORDER: true
+    DIAGNOSTICS_ENABLED: true
+    SAVE_VAL_MANIFEST: true
+  PARTIAL_ADAPTATION:
+    ENABLED: false
+    FLAT_MULTIVIEW_BASELINE: false
+  PCUM:
+    USE_PSEUDO_REMOTE: false
+    USE_REAL_MULTIVIEW: false
+    PAIRED_SUPERVISION: false
+    RANKING_ENABLED: false
+  PCUM_RANKING:
+    ENABLED: false
+  C3R:
+    ENABLED: false
+  TEMPORAL_GATE:
+    ENABLED: false
+  FCVC:
+    ENABLED: false
+
+TEST:
+  SAVE_DIR: output/diagnostics/b0_abc_plain
+  CHECKPOINT_NAME: b0_abc_plain
+  USE_SEARCH_PROMPT: false
+  PCUM:
+    USE_REMOTE: false
+    REMOTE_STATE_SOURCE: none
+    USE_REMOTE_VISIBLE_MASK: false
+  C3R:
+    ENABLED: false
+  TEMPORAL_GATE:
+    ENABLED: false
+  COOP:
+    ENABLED: false

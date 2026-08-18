@@ -8,6 +8,7 @@ Add default config for OSTrack.
 """
 cfg = edict()
 cfg.BASE_CONFIG = ""
+cfg.EXPERIMENT_NAME = ""
 cfg.MODEL_ROLE = "unspecified"
 cfg.B0_CHECKPOINT = ""
 cfg.TRAIN_PCUM_ONLY = False
@@ -156,6 +157,11 @@ cfg.TRAIN.MULTIVIEW = edict()
 # the exact same grouped multi-view samples. Legacy PCUM configs keep their
 # previous behavior through TRAIN.PCUM.USE_REAL_MULTIVIEW in train_script.py.
 cfg.TRAIN.MULTIVIEW.ENABLED = False
+cfg.TRAIN.MULTIVIEW.FLAT_BASELINE = False
+cfg.TRAIN.MULTIVIEW.REQUIRE_ALL_VIEWS_VISIBLE = False
+cfg.TRAIN.MULTIVIEW.CANONICAL_VIEW_ORDER = False
+cfg.TRAIN.MULTIVIEW.DIAGNOSTICS_ENABLED = False
+cfg.TRAIN.MULTIVIEW.SAVE_VAL_MANIFEST = False
 cfg.TRAIN.PCUM_RANKING = edict()
 cfg.TRAIN.PCUM_RANKING.ENABLED = False
 cfg.TRAIN.PCUM_RANKING.FREEZE_BACKBONE = False
