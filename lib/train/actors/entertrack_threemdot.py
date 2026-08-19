@@ -57,6 +57,7 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
         if self._diagnostics_enabled:
             self._register_fusion_diagnostic_hook()
         self._c3r_iteration = 0
+        self.last_arp_sample_diagnostics = []
         c3r_train = getattr(getattr(cfg, "TRAIN", None), "C3R", None)
         self._c3r_perturbation = CommunicationPerturbation(
             enabled=bool(getattr(c3r_train, "PERTURBATIONS_ENABLED", False)),
@@ -87,10 +88,11 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
         out_dict = self.forward_pass(self.net, data)
 
         loss, status = self.compute_losses(out_dict, data)
-        plain_diagnostics = self._plain_multiview_diagnostics(out_dict)
-        if plain_diagnostics and not bool(torch.isfinite(loss).item()):
-            raise RuntimeError("B0-ABC-Plain produced a non-finite loss")
-        status.update(plain_diagnostics)
+        backbone_diagnostics = self._multiview_backbone_diagnostics(
+            out_dict, data)
+        if backbone_diagnostics and not bool(torch.isfinite(loss).item()):
+            raise RuntimeError("Controlled ABC backbone produced a non-finite loss")
+        status.update(backbone_diagnostics)
 
         if isinstance(out_dict, dict) and isinstance(out_dict.get("c3r", None), dict):
             diagnostics = out_dict["c3r"]
@@ -612,6 +614,188 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
             "Plain/remote_state_present": 0.0,
             "Plain/pruning_present": 0.0,
         }
+
+    def _multiview_backbone_diagnostics(self, output, data):
+        self.last_arp_sample_diagnostics = []
+        if not self._get_cfg_value(
+                "TRAIN.MULTIVIEW.DIAGNOSTICS_ENABLED", False):
+            return {}
+        backbone_type = str(self._get_cfg_value("MODEL.BACKBONE.TYPE", ""))
+        if backbone_type == "vit_tiny_patch16_224_half":
+            return self._plain_multiview_diagnostics(output)
+        if backbone_type == "vit_tiny_patch16_224_arp":
+            return self._arp_multiview_diagnostics(output, data)
+        raise RuntimeError(
+            "Controlled multiview diagnostics do not recognize backbone %s"
+            % backbone_type)
+
+    def _arp_multiview_diagnostics(self, output, data):
+        """Validate and summarize the frozen B1 ARP/ATP implementation.
+
+        The returned values are detached logging statistics.  The hard ATP
+        mask is the logical keep mask used by the existing STE training path;
+        its complement is routed through the existing delta compensation.
+        """
+        if not output.get("pcum_flat_multiview", False):
+            raise RuntimeError("B1-ABC-ARP diagnostics require the flat ABC path")
+        if self._get_cfg_value(
+                "TRAIN.MULTIVIEW.INDEPENDENT_VIEW_SAMPLING", False):
+            raise RuntimeError("B1-ABC-ARP forbids independent-view sampling")
+        if not self._get_cfg_value(
+                "TRAIN.MULTIVIEW.REQUIRE_ALL_VIEWS_VISIBLE", False):
+            raise RuntimeError("B1-ABC-ARP requires the common-visible sampler")
+
+        required_switches = (
+            "MODEL.BACKBONE.PRUNING_ENABLED",
+            "MODEL.BACKBONE.DYNAMIC_THRESHOLD_ENABLED",
+            "MODEL.BACKBONE.TOKEN_COMPENSATION_ENABLED",
+        )
+        disabled = [
+            path for path in required_switches
+            if not bool(self._get_cfg_value(path, False))
+        ]
+        if disabled:
+            raise RuntimeError("B1 ARP audit switches are disabled: %s" % disabled)
+        if list(self.cfg.MODEL.BACKBONE.CE_LOC) != [0]:
+            raise RuntimeError("B1-ABC-ARP requires CE_LOC=[0]")
+        if list(self.cfg.MODEL.BACKBONE.CE_KEEP_RATIO) != [0.7]:
+            raise RuntimeError("B1-ABC-ARP requires CE_KEEP_RATIO=[0.7]")
+
+        network = self._unwrap_network()
+        if getattr(network, "pcum", None) is not None:
+            raise RuntimeError("B1-ABC-ARP unexpectedly constructed PCUM")
+        if getattr(network, "c3r", None) is not None:
+            raise RuntimeError("B1-ABC-ARP unexpectedly constructed C3R")
+        if getattr(network, "search_prompt_gate", None) is not None:
+            raise RuntimeError("B1-ABC-ARP unexpectedly constructed a prompt gate")
+        backbone = getattr(network, "backbone", None)
+        blocks = list(getattr(backbone, "blocks", []))
+        if len(blocks) != 6 or getattr(backbone, "embed_dim", None) != 192:
+            raise RuntimeError("B1-ABC-ARP requires ViT-Tiny dim=192 depth=6")
+        atp = getattr(blocks[0], "atp", None)
+        if atp is None or getattr(atp, "delta_estimator", None) is None:
+            raise RuntimeError("B1-ABC-ARP ATP/compensation modules are missing")
+        atp_parameters = [
+            parameter for name, parameter in network.named_parameters()
+            if ".atp." in name
+        ]
+        if not atp_parameters or not all(
+                parameter.requires_grad for parameter in atp_parameters):
+            raise RuntimeError("B1 ATP parameters are absent or frozen")
+
+        expected_search = (
+            int(self.cfg.DATA.SEARCH.SIZE)
+            // int(self.cfg.MODEL.BACKBONE.STRIDE)
+        ) ** 2
+        expected_template = (
+            int(self.cfg.DATA.TEMPLATE.SIZE)
+            // int(self.cfg.MODEL.BACKBONE.STRIDE)
+        ) ** 2
+        feature = output.get("backbone_feat", None)
+        if (not torch.is_tensor(feature)
+                or feature.shape[1] != expected_template + expected_search):
+            raise RuntimeError("B1 compensated feature did not restore 64+256 tokens")
+        if int(output.get("arp_initial_search_tokens", -1)) != expected_search:
+            raise RuntimeError("B1 initial search-token count is not 256")
+        if int(output.get("arp_output_search_tokens", -1)) != expected_search:
+            raise RuntimeError("B1 CENTER input did not restore 256 search tokens")
+        score_map = output.get("score_map", None)
+        pred_boxes = output.get("pred_boxes", None)
+        if (not torch.is_tensor(score_map)
+                or tuple(score_map.shape[-2:]) != (16, 16)
+                or not torch.is_tensor(pred_boxes)
+                or pred_boxes.shape[-1] != 4):
+            raise RuntimeError("B1 CENTER head output contract is invalid")
+        if any(key in output for key in ("remote_prompt", "remote_state")):
+            raise RuntimeError("B1-ABC-ARP emitted remote collaboration state")
+
+        keep_masks = output.get("atp_keep_masks", [])
+        thresholds = output.get("atp_thresholds", [])
+        compensation_masks = output.get("compensation_masks", [])
+        delta_norms = output.get("compensation_delta_norms", [])
+        if not keep_masks or not thresholds or not compensation_masks:
+            raise RuntimeError("B1-ABC-ARP did not execute ATP pruning/compensation")
+        if len(keep_masks) != len(thresholds) or len(keep_masks) != len(compensation_masks):
+            raise RuntimeError("B1 ARP diagnostic layer counts do not match")
+
+        num_views = int(output.get("num_views", 0))
+        total_batch = int(keep_masks[0].shape[0])
+        if num_views != 3 or total_batch % num_views != 0:
+            raise RuntimeError("B1 flat output is not a [3*B] batch")
+        group_batch = total_batch // num_views
+        status = {
+            "ARP/initial_search_tokens": float(expected_search),
+            "ARP/restored_search_tokens": float(expected_search),
+            "ARP/atp_parameter_count": float(sum(
+                parameter.numel() for parameter in atp_parameters)),
+            "ARP/flat_multiview": 1.0,
+            "ARP/pcum_present": 0.0,
+            "ARP/c3r_present": 0.0,
+            "ARP/remote_state_present": 0.0,
+        }
+
+        layer_keep_ratios = []
+        for layer_index, keep_mask in enumerate(keep_masks):
+            hard_keep = keep_mask.detach().float()
+            if hard_keep.shape != (total_batch, expected_search):
+                raise RuntimeError("B1 ATP keep-mask shape is invalid")
+            keep_ratio = hard_keep.mean(dim=1)
+            layer_keep_ratios.append(keep_ratio)
+            threshold = thresholds[layer_index].detach().float().reshape(total_batch, -1).mean(dim=1)
+            compensation = compensation_masks[layer_index].detach().float()
+            compensation_ratio = compensation.mean(dim=1)
+            if not torch.equal(compensation, 1.0 - hard_keep):
+                raise RuntimeError("B1 compensation mask is not the pruned-token complement")
+            delta = delta_norms[layer_index]
+            if delta is None:
+                raise RuntimeError("B1 compensation delta was not executed")
+            delta = delta.detach().float()
+            active_delta_mean = delta.sum(dim=1) / compensation.sum(dim=1).clamp_min(1.0)
+
+            prefix = "ARP/layer_%d" % int(self.cfg.MODEL.BACKBONE.CE_LOC[layer_index])
+            status[prefix + "/mean_kept_search_tokens"] = float(
+                keep_ratio.mean().item() * expected_search)
+            status[prefix + "/mean_pruned_search_tokens"] = float(
+                (1.0 - keep_ratio).mean().item() * expected_search)
+            status[prefix + "/keep_ratio"] = float(keep_ratio.mean().item())
+            status[prefix + "/threshold_mean"] = float(threshold.mean().item())
+            status[prefix + "/threshold_std"] = float(
+                threshold.std(unbiased=False).item())
+            status[prefix + "/compensation_activation_ratio"] = float(
+                compensation_ratio.mean().item())
+            status[prefix + "/compensation_delta_norm"] = float(
+                active_delta_mean.mean().item())
+
+            for view_index, view_label in enumerate(("A", "B", "C")):
+                start = view_index * group_batch
+                end = (view_index + 1) * group_batch
+                status[prefix + "/view_%s_keep_ratio" % view_label] = float(
+                    keep_ratio[start:end].mean().item())
+
+        primary_keep = layer_keep_ratios[0]
+        primary_threshold = thresholds[0].detach().float().reshape(total_batch, -1).mean(dim=1)
+        primary_compensation = compensation_masks[0].detach().float().mean(dim=1)
+        search_anno = data.get("search_anno", None)
+        target_ids = data.get("target_id", [])
+        view_ids = data.get("view_ids", [])
+        rows = []
+        for view_index in range(num_views):
+            for batch_index in range(group_batch):
+                flat_index = view_index * group_batch + batch_index
+                bbox = search_anno[view_index][batch_index].detach().float().reshape(-1, 4)[0]
+                view_label = str(view_ids[view_index][batch_index])
+                rows.append({
+                    "target_id": str(target_ids[batch_index]),
+                    "view_id": view_label,
+                    "bbox_area": float((bbox[2] * bbox[3]).item()),
+                    "kept_search_tokens": float(primary_keep[flat_index].item() * expected_search),
+                    "pruned_search_tokens": float((1.0 - primary_keep[flat_index]).item() * expected_search),
+                    "keep_ratio": float(primary_keep[flat_index].item()),
+                    "atp_threshold": float(primary_threshold[flat_index].item()),
+                    "compensation_activation_ratio": float(primary_compensation[flat_index].item()),
+                })
+        self.last_arp_sample_diagnostics = rows
+        return status
 
     def _squeeze_if_needed(self, value):
         """

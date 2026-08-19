@@ -53,6 +53,7 @@ class LTRTrainer(BaseTrainer):
         self.move_data_to_gpu = getattr(settings, 'move_data_to_gpu', True)
         self.settings = settings
         self.use_amp = use_amp
+        self._arp_gradient_checked = False
         if use_amp:
             self.scaler = GradScaler()
 
@@ -98,6 +99,7 @@ class LTRTrainer(BaseTrainer):
         causal_violations = 0
         visibility_violations = 0
         independent_sampling_active = False
+        arp_sample_rows = []
 
         for i, data in enumerate(loader, 1):
             self.data_read_done_time = time.time()
@@ -215,6 +217,10 @@ class LTRTrainer(BaseTrainer):
             else:
                 with autocast():
                     loss, stats = self.actor(data)
+            current_arp_rows = getattr(
+                self.actor, "last_arp_sample_diagnostics", [])
+            if current_arp_rows:
+                arp_sample_rows.extend(current_arp_rows)
 
             # backward pass and update weights
             def print_grad_norms():
@@ -241,6 +247,7 @@ class LTRTrainer(BaseTrainer):
                     #         return hook
                     #     param.register_hook(make_hook(name))
                     loss.backward()
+                    self._check_arp_gradients(loader, iteration=i)
                     # if i % 80 == 0:  # 每 100 个 iter 打印一次，防止刷屏
                     #     print_grad_norms()
                     # backbone_params = []
@@ -259,8 +266,9 @@ class LTRTrainer(BaseTrainer):
                     self.optimizer.step()
                 else:
                     self.scaler.scale(loss).backward()
+                    self.scaler.unscale_(self.optimizer)
+                    self._check_arp_gradients(loader, iteration=i)
                     if self.settings.grad_clip_norm > 0:
-                        self.scaler.unscale_(self.optimizer)
                         torch.nn.utils.clip_grad_norm_(self.actor.net.parameters(), self.settings.grad_clip_norm)
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
@@ -327,6 +335,32 @@ class LTRTrainer(BaseTrainer):
                     visibility_violations += item["visibility_violations"]
             else:
                 multiview_counts.clear()
+
+        if arp_sample_rows and dist.is_available() and dist.is_initialized():
+            gathered_arp_rows = [None for _ in range(dist.get_world_size())]
+            dist.all_gather_object(gathered_arp_rows, arp_sample_rows)
+            if dist.get_rank() == 0:
+                arp_sample_rows = [
+                    row for rank_rows in gathered_arp_rows for row in rank_rows
+                ]
+            else:
+                arp_sample_rows = []
+
+        if arp_sample_rows and self.settings.local_rank in [-1, 0]:
+            arp_payload = self._summarize_arp_rows(
+                arp_sample_rows, loader.name, self.epoch)
+            arp_line = "[ARPEpoch] " + json.dumps(
+                arp_payload, sort_keys=True, ensure_ascii=True)
+            print(arp_line)
+            with open(self.settings.log_file, "a") as log_file:
+                log_file.write(arp_line + "\n")
+            arp_metrics_path = os.path.join(
+                os.path.dirname(self.settings.log_file),
+                "arp_epoch_metrics.jsonl",
+            )
+            with open(arp_metrics_path, "a") as metrics_file:
+                metrics_file.write(json.dumps(
+                    arp_payload, sort_keys=True, ensure_ascii=True) + "\n")
 
         if multiview_counts:
             payload = {
@@ -405,6 +439,112 @@ class LTRTrainer(BaseTrainer):
         print("Avg Data Time: %.5f" % (self.avg_date_time / self.num_frames * batch_size))
         print("Avg GPU Trans Time: %.5f" % (self.avg_gpu_trans_time / self.num_frames * batch_size))
         print("Avg Forward Time: %.5f" % (self.avg_forward_time / self.num_frames * batch_size))
+
+    def _check_arp_gradients(self, loader, iteration):
+        if self._arp_gradient_checked or not loader.training:
+            return
+        cfg = getattr(self.actor, "cfg", None)
+        backbone_type = str(getattr(
+            getattr(getattr(cfg, "MODEL", None), "BACKBONE", None),
+            "TYPE", ""))
+        if backbone_type != "vit_tiny_patch16_224_arp":
+            return
+        named_gradients = [
+            (name, parameter.grad)
+            for name, parameter in self.actor.net.named_parameters()
+            if ".atp." in name and parameter.requires_grad
+        ]
+        if not named_gradients or any(gradient is None for _, gradient in named_gradients):
+            raise RuntimeError("ARP smoke audit found missing ATP gradients")
+        if any(not bool(torch.isfinite(gradient).all().item())
+               for _, gradient in named_gradients):
+            raise RuntimeError("ARP smoke audit found non-finite ATP gradients")
+        threshold_nonzero = any(
+            bool((gradient.detach().abs() > 0).any().item())
+            for name, gradient in named_gradients
+            if "threshold_predictor" in name
+        )
+        compensation_nonzero = any(
+            bool((gradient.detach().abs() > 0).any().item())
+            for name, gradient in named_gradients
+            if "delta_estimator" in name
+        )
+        if not threshold_nonzero or not compensation_nonzero:
+            raise RuntimeError(
+                "ARP smoke audit requires nonzero ATP and compensation gradients")
+        self._arp_gradient_checked = True
+        line = (
+            "[ARPGradient] iteration=%d parameters=%d finite=true "
+            "threshold_nonzero=true compensation_nonzero=true"
+            % (iteration, len(named_gradients))
+        )
+        print(line)
+        if self.settings.local_rank in [-1, 0]:
+            with open(self.settings.log_file, "a") as log_file:
+                log_file.write(line + "\n")
+
+    @staticmethod
+    def _summarize_arp_rows(rows, loader_name, epoch):
+        def summarize(group_rows):
+            count = len(group_rows)
+            values = {
+                key: [float(row[key]) for row in group_rows]
+                for key in (
+                    "bbox_area",
+                    "kept_search_tokens",
+                    "pruned_search_tokens",
+                    "keep_ratio",
+                    "atp_threshold",
+                    "compensation_activation_ratio",
+                )
+            }
+            result = {"samples": count}
+            for key, items in values.items():
+                mean = sum(items) / count
+                result[key + "_mean"] = mean
+                result[key + "_std"] = (
+                    sum((item - mean) ** 2 for item in items) / count
+                ) ** 0.5
+            bbox = values["bbox_area"]
+            keep = values["keep_ratio"]
+            bbox_mean = result["bbox_area_mean"]
+            keep_mean = result["keep_ratio_mean"]
+            covariance = sum(
+                (x - bbox_mean) * (y - keep_mean)
+                for x, y in zip(bbox, keep)
+            )
+            bbox_scale = sum((x - bbox_mean) ** 2 for x in bbox) ** 0.5
+            keep_scale = sum((y - keep_mean) ** 2 for y in keep) ** 0.5
+            result["bbox_area_keep_ratio_pearson"] = (
+                covariance / (bbox_scale * keep_scale)
+                if bbox_scale > 0 and keep_scale > 0 else 0.0
+            )
+            return result
+
+        by_view = defaultdict(list)
+        by_target = defaultdict(list)
+        by_target_view = defaultdict(list)
+        for row in rows:
+            by_view[str(row["view_id"])].append(row)
+            by_target[str(row["target_id"])].append(row)
+            by_target_view[
+                "%s x %s" % (row["target_id"], row["view_id"])
+            ].append(row)
+        return {
+            "loader": str(loader_name),
+            "epoch": int(epoch),
+            "overall": summarize(rows),
+            "by_view": {
+                key: summarize(value) for key, value in sorted(by_view.items())
+            },
+            "by_target": {
+                key: summarize(value) for key, value in sorted(by_target.items())
+            },
+            "by_target_view": {
+                key: summarize(value)
+                for key, value in sorted(by_target_view.items())
+            },
+        }
 
     def _paired_training_step(self, data, iteration):
         diagnostics_interval = int(self.actor._get_cfg_value(

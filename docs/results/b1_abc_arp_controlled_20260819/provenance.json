@@ -1,0 +1,45 @@
+{
+  "arp_epoch_metrics_sha256": "ee5f5febe167f4633f1a3ca9e9feda4dba01f31b8d333bec9c9119588f07063a",
+  "b1_runids": [
+    29415,
+    29420,
+    29425
+  ],
+  "batch_size_per_gpu": 2,
+  "branch": "feature/pcum-cross-layer-arp",
+  "dataset": "threemdot_val",
+  "epochs": 25,
+  "evaluation_protocol": {
+    "exclude_invalid_frames": false,
+    "implementation": "lib.test.analysis.extract_results.calc_seq_err_robust",
+    "name": "ostrack",
+    "sequence_macro_average": true,
+    "success_comparator": ">",
+    "uses_target_visible": true
+  },
+  "formal_checkpoint_count": 25,
+  "formal_training_log_sha256": "41c7c536780abfbd5255ed53afa847eb45403044150cfe51d162a2317fd4ffcb",
+  "gpus": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "no_gt_inference": true,
+  "official_test_run": false,
+  "remote_state_source": "none",
+  "samples_per_epoch": 6000,
+  "seed": 42,
+  "smoke_run": "/data/zjy/EnTeR-Track-main/output/diagnostics/b1_abc_arp/smoke_20260819_r001",
+  "stage_a_new_runids": [
+    29126,
+    29127,
+    29128,
+    29129,
+    29326,
+    29327,
+    29328,
+    29329
+  ],
+  "training_run": "/data/zjy/EnTeR-Track-main/output/diagnostics/b1_abc_arp/formal_20260819_seed42_4gpu_r001"
+}

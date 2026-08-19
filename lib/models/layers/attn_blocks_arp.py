@@ -52,10 +52,21 @@ class ATP(nn.Module):
             self.delta_estimator = DeltaEstimator(dim)
         else:
             self.delta_estimator = None
+        # Detached, last-forward values used only by the controlled ARP
+        # diagnostics. They never participate in the loss or tracker state.
+        self.last_threshold = None
+        self.last_keep_mask = None
+        self.last_compensation_mask = None
+        self.last_compensation_delta_norm = None
 
     def forward(self, attn: torch.Tensor, tokens: torch.Tensor, lens_t: int,
                 global_index: torch.Tensor, box_mask_z: torch.Tensor, training: bool = True, ce_keep_rate=1.0,
                 temperature=20.0):
+
+        self.last_threshold = None
+        self.last_keep_mask = None
+        self.last_compensation_mask = None
+        self.last_compensation_delta_norm = None
 
         if ce_keep_rate >= 0.9:
             return tokens, global_index, None, None, None, None
@@ -80,18 +91,25 @@ class ATP(nn.Module):
         redundant_scores = 1 - compute_saliency_scores(attn_t)
         threshold = self.threshold_predictor(redundant_scores)
         threshold = torch.sigmoid(threshold)
+        self.last_threshold = threshold.detach()
         tokens_frozen = None
 
         if training:
             soft_mask = torch.sigmoid((redundant_scores - threshold) * temperature)
             mask = (soft_mask > 0.5).float()
             ste_mask = (mask - soft_mask).detach() + soft_mask
+            self.last_keep_mask = mask.detach()
+            self.last_compensation_mask = (1.0 - mask).detach()
 
             full_mask = torch.cat([torch.ones_like(tokens_t[:, :, 0]), mask], dim=1)
 
             if self.delta_estimator is not None:
                 delta_x = self.delta_estimator(tokens_s * (1 - ste_mask.unsqueeze(-1)))
                 tokens_frozen = (tokens_s + delta_x) * (1 - ste_mask.unsqueeze(-1))
+                self.last_compensation_delta_norm = (
+                    delta_x.detach().norm(dim=-1)
+                    * self.last_compensation_mask
+                )
 
 
             tokens_s_new = tokens_s
@@ -99,6 +117,8 @@ class ATP(nn.Module):
             return tokens_new, global_index, None, ste_mask, full_mask, tokens_frozen
         else:
             keep_mask = redundant_scores > threshold
+            self.last_keep_mask = keep_mask.detach().float()
+            self.last_compensation_mask = (~keep_mask).detach().float()
             attentive_tokens = torch.masked_select(tokens_s, keep_mask.unsqueeze(-1)).view(1, -1, tokens.shape[-1])
             keep_index = torch.masked_select(global_index, keep_mask).view(1, -1)
             removed_tokens = torch.masked_select(tokens_s, ~keep_mask.unsqueeze(-1)).view(1, -1, tokens.shape[-1])
@@ -107,6 +127,7 @@ class ATP(nn.Module):
             if self.delta_estimator is not None and removed_tokens.shape[1] > 0:
                 delta_x = self.delta_estimator(removed_tokens)
                 tokens_frozen = removed_tokens + delta_x
+                self.last_compensation_delta_norm = delta_x.detach().norm(dim=-1)
 
             tokens_new = torch.cat([tokens_t, attentive_tokens], dim=1)
 

@@ -1,0 +1,33 @@
+{
+  "atp_key_count": 12,
+  "backbone": "vit_tiny_patch16_224_arp",
+  "c3r": false,
+  "ce_keep_ratio": [
+    0.7
+  ],
+  "ce_loc": [
+    0
+  ],
+  "checkpoint_path": "/data/zjy/EnTeR-Track-main/output/diagnostics/b1_abc_arp/formal_20260819_seed42_4gpu_r001/checkpoints/train/entertrack/b1_abc_arp_4gpu/EnTeRTrack_ep0025.pth.tar",
+  "checkpoint_sha256": "5de3d210f2a819eff9a4b94cd0aa97a3f81a7cf4682b79e80e86e700011c3932",
+  "common_visible_sampler": true,
+  "depth": 6,
+  "dynamic_threshold_enabled": true,
+  "embedding_dim": 192,
+  "experiment": "B1-ABC-ARP",
+  "fcvc": false,
+  "flat_multiview": true,
+  "heads": 3,
+  "independent_view_sampling": false,
+  "initial_search_tokens": 256,
+  "network_tensor_count": 182,
+  "pcum": false,
+  "pcum_key_count": 0,
+  "pretrain_path": "/data/zjy/EnTeR-Track-main/pretrained_models/tiny_7_OSTrack_ep0300.pth.tar",
+  "pretrain_sha256": "94b20f6f955d5be1f00fb5765a489377535e2be86e0f3289781ae936035c2c4c",
+  "pruning_enabled": true,
+  "remote_state": false,
+  "restored_search_tokens": 256,
+  "template_tokens": 64,
+  "token_compensation_enabled": true
+}

@@ -1,0 +1,4 @@
+epoch,auc,precision,norm_precision,runid,checkpoint_path,checkpoint_sha256
+15,64.1461159813011,83.35668066639205,82.50160982359309,29415,/data/zjy/EnTeR-Track-main/output/diagnostics/b1_abc_arp/formal_20260819_seed42_4gpu_r001/checkpoints/train/entertrack/b1_abc_arp_4gpu/EnTeRTrack_ep0015.pth.tar,f87f916356182a06279a499a46f9edfeae89357614554079e1d158177e5f81f4
+20,64.46571261174667,83.17514268906392,82.52780697167748,29420,/data/zjy/EnTeR-Track-main/output/diagnostics/b1_abc_arp/formal_20260819_seed42_4gpu_r001/checkpoints/train/entertrack/b1_abc_arp_4gpu/EnTeRTrack_ep0020.pth.tar,cbf84a8fc47c242889efc4df6044154d540ea20f7f8c15ede2fb596a0eb5f3ed
+25,60.85326181970181,78.74000461242007,77.83387912366598,29425,/data/zjy/EnTeR-Track-main/output/diagnostics/b1_abc_arp/formal_20260819_seed42_4gpu_r001/checkpoints/train/entertrack/b1_abc_arp_4gpu/EnTeRTrack_ep0025.pth.tar,5de3d210f2a819eff9a4b94cd0aa97a3f81a7cf4682b79e80e86e700011c3932

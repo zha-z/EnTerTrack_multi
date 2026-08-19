@@ -1,0 +1,91 @@
+{
+  "bootstrap_auc_95ci": [
+    0.5708688015070682,
+    0.7065931549314989
+  ],
+  "comparison": {
+    "harmful_sequences": [],
+    "matched_sequences": 0,
+    "mean_auc_delta": NaN,
+    "reference": null
+  },
+  "dataset_name": "threemdot_val",
+  "evaluation_protocol": {
+    "exclude_invalid_frames": false,
+    "implementation": "lib.test.analysis.extract_results.calc_seq_err_robust",
+    "name": "ostrack",
+    "sequence_macro_average": true,
+    "success_comparator": ">",
+    "uses_target_visible": true
+  },
+  "overall": {
+    "auc": 0.6414611598130109,
+    "mean_iou": 0.6832485366046279,
+    "normalized_precision": 0.8250160982359308,
+    "precision": 0.8335668066639205
+  },
+  "per_target": {
+    "md3016": {
+      "auc": 0.6505972835869743,
+      "mean_iou": 0.6988947631031613,
+      "normalized_precision": 0.9498281786941581,
+      "precision": 0.9103092783505154
+    },
+    "md3027": {
+      "auc": 0.8067013190252629,
+      "mean_iou": 0.8280969036932676,
+      "normalized_precision": 1.0,
+      "precision": 0.994131455399061
+    },
+    "md3034": {
+      "auc": 0.5878952974662545,
+      "mean_iou": 0.6872038796576804,
+      "normalized_precision": 0.8104143747708105,
+      "precision": 0.881921525485882
+    },
+    "md3048": {
+      "auc": 0.5058400718778077,
+      "mean_iou": 0.5294557133677389,
+      "normalized_precision": 0.5742138364779873,
+      "precision": 0.5534591194968553
+    },
+    "md3055": {
+      "auc": 0.6562718271087554,
+      "mean_iou": 0.6725914232012915,
+      "normalized_precision": 0.7906241012366982,
+      "precision": 0.8280126545872878
+    }
+  },
+  "per_view": {
+    "A": {
+      "auc": 0.6247851892580786,
+      "mean_iou": 0.708868128528316,
+      "normalized_precision": 0.8443933368868819,
+      "precision": 0.8077572483215579
+    },
+    "B": {
+      "auc": 0.6241454252470924,
+      "mean_iou": 0.6388986835639707,
+      "normalized_precision": 0.7677317611539666,
+      "precision": 0.8120064500331379
+    },
+    "C": {
+      "auc": 0.6754528649338619,
+      "mean_iou": 0.701978797721597,
+      "normalized_precision": 0.8629231966669441,
+      "precision": 0.8809367216370652
+    }
+  },
+  "runtime": {
+    "fps": 181.20433858040937,
+    "frame_count": 14112,
+    "mean_seconds": 0.005518631660997732
+  },
+  "sequence_count": 15,
+  "state_identity": {
+    "digest_count": 0,
+    "digest_sha256": null
+  },
+  "tracker_name": "entertrack",
+  "tracker_param": "b1_abc_arp_4gpu"
+}

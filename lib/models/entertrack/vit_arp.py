@@ -173,6 +173,10 @@ class VisionTransformerCE(VisionTransformer):
 
         removed_indexes_s = []
         atp_masks = []
+        atp_thresholds = []
+        atp_keep_masks = []
+        compensation_masks = []
+        compensation_delta_norms = []
         attn_mask = None
         tokens = []
         frozen_token = None
@@ -183,6 +187,13 @@ class VisionTransformerCE(VisionTransformer):
             if atp_mask is not None:
                 atp_masks.append(atp_mask)
                 attn_mask = ~(attn_mask.bool())
+            atp = getattr(blk, "atp", None)
+            if atp is not None and atp.last_threshold is not None:
+                atp_thresholds.append(atp.last_threshold)
+                atp_keep_masks.append(atp.last_keep_mask)
+                compensation_masks.append(atp.last_compensation_mask)
+                compensation_delta_norms.append(
+                    atp.last_compensation_delta_norm)
             if self.ce_loc is not None and i in self.ce_loc and removed_index_s is not None:
                 removed_indexes_s.append(removed_index_s)
         x = self.norm(x)
@@ -221,6 +232,12 @@ class VisionTransformerCE(VisionTransformer):
                 "removed_indexes_s": removed_indexes_s,  # used for visualization
                 'atp_masks': atp_masks,
                 'atp_layers': torch.tensor([0]),
+                'atp_thresholds': atp_thresholds,
+                'atp_keep_masks': atp_keep_masks,
+                'compensation_masks': compensation_masks,
+                'compensation_delta_norms': compensation_delta_norms,
+                'arp_initial_search_tokens': lens_x,
+                'arp_output_search_tokens': x.shape[1] - lens_z_new,
             }
         else:
             aux_dict = {

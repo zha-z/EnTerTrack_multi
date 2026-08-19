@@ -1,0 +1,6 @@
+{
+  "bbox_area_vs_auc_delta_pearson": 0.2937747615710794,
+  "bbox_area_vs_keep_ratio_pearson": 0.8947482786194055,
+  "keep_ratio_vs_auc_delta_pearson": 0.206721695788143,
+  "n_targets": 5
+}

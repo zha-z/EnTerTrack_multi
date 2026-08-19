@@ -1,0 +1,153 @@
+Evaluating    1 trackers on    15 sequences
+Tracker: entertrack b0_abc_plain_ind_sampler_4gpu_ep50 29329 ,  Sequence: md3048-1
+[MCR MODE]
+config=b0_abc_plain_ind_sampler_4gpu_ep50
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_ind_sampler_4gpu_ep50
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_ind_sampler_4gpu_ep50
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3048-1
+Tracker: entertrack b0_abc_plain_ind_sampler_4gpu_ep50 29329 ,  Sequence: md3034-1
+[MCR MODE]
+config=b0_abc_plain_ind_sampler_4gpu_ep50
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_ind_sampler_4gpu_ep50
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_ind_sampler_4gpu_ep50
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3034-1
+Tracker: entertrack b0_abc_plain_ind_sampler_4gpu_ep50 29329 ,  Sequence: md3055-1
+[MCR MODE]
+config=b0_abc_plain_ind_sampler_4gpu_ep50
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_ind_sampler_4gpu_ep50
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_ind_sampler_4gpu_ep50
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3055-1
+Tracker: entertrack b0_abc_plain_ind_sampler_4gpu_ep50 29329 ,  Sequence: md3016-1
+[MCR MODE]
+config=b0_abc_plain_ind_sampler_4gpu_ep50
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_ind_sampler_4gpu_ep50
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_ind_sampler_4gpu_ep50
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3016-1
+Tracker: entertrack b0_abc_plain_ind_sampler_4gpu_ep50 29329 ,  Sequence: md3027-1
+[MCR MODE]
+config=b0_abc_plain_ind_sampler_4gpu_ep50
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_ind_sampler_4gpu_ep50
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[MCR MODE]
+config=b0_abc_plain_ind_sampler_4gpu_ep50
+enabled=false
+shadow_only=true
+global_enabled=false
+mode=DISABLED
+[PCUM remote state] source=none uses_gt_visibility=false sequence=md3027-1
+FPS: 181.21280245492855
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+FPS: 215.8443484110233
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+/home/user/.conda/envs/zjy/lib/python3.8/site-packages/timm/models/layers/__init__.py:49: FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.layers", FutureWarning)
+/data/zjy/EnTeR-Track-main/lib/test/tracker/entertrack.py:653: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  checkpoint = torch.load(checkpoint_path, map_location="cpu")
+/home/user/.conda/envs/zjy/lib/python3.8/site-packages/timm/models/layers/__init__.py:49: FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.layers", FutureWarning)
+/data/zjy/EnTeR-Track-main/lib/test/tracker/entertrack.py:653: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  checkpoint = torch.load(checkpoint_path, map_location="cpu")
+FPS: 222.47236465464584
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+/home/user/.conda/envs/zjy/lib/python3.8/site-packages/timm/models/layers/__init__.py:49: FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.layers", FutureWarning)
+/data/zjy/EnTeR-Track-main/lib/test/tracker/entertrack.py:653: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  checkpoint = torch.load(checkpoint_path, map_location="cpu")
+FPS: 215.0915611089971
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+/home/user/.conda/envs/zjy/lib/python3.8/site-packages/timm/models/layers/__init__.py:49: FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.layers", FutureWarning)
+/data/zjy/EnTeR-Track-main/lib/test/tracker/entertrack.py:653: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  checkpoint = torch.load(checkpoint_path, map_location="cpu")
+FPS: 222.4517798548699
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+saving scores...
+saving APCE...
+Done

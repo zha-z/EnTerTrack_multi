@@ -1,0 +1,21 @@
+BASE_CONFIG: b0_abc_plain_4gpu
+EXPERIMENT_NAME: B1-ABC-ARP
+MODEL_ROLE: controlled_b1_arp
+
+MODEL:
+  BACKBONE:
+    TYPE: vit_tiny_patch16_224_arp
+    PRUNING_ENABLED: true
+    DYNAMIC_THRESHOLD_ENABLED: true
+    TOKEN_COMPENSATION_ENABLED: true
+    CE_LOC: [0]
+    CE_KEEP_RATIO: [0.7]
+    CE_TEMPLATE_RANGE: CTR_POINT
+
+TRAIN:
+  FLOPS_WEIGHT: 0.03
+
+TEST:
+  SAVE_DIR: output/diagnostics/b1_abc_arp
+  CHECKPOINT_NAME: b1_abc_arp_4gpu
+  EPOCH: 25
