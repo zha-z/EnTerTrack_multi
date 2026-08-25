@@ -9,6 +9,9 @@ from lib.models.entertrack.vit_arp import vit_tiny_patch16_224_arp
 from lib.models.entertrack.vit import vit_tiny_patch16_224,vit_tiny_patch16_224_half
 from lib.models.entertrack.pcum import build_pcum
 from lib.models.entertrack.c3r import build_c3r
+from lib.models.entertrack.plain_collaboration import build_plain_collaboration
+from lib.models.entertrack.plain_collaboration_checkpoint import (
+    load_plain_collaboration_initialization)
 from lib.utils.box_ops import box_xyxy_to_cxcywh
 
 
@@ -244,7 +247,9 @@ class EnTeRTrack(nn.Module):
 
     def __init__(self, transformer, box_head, aux_loss=False, head_type="CORNER",
                  use_search_prompt=False, prompt_hidden_dim=32, prompt_init_scale=0.1,
-                 pcum=None, c3r=None, c3r_freeze_local=False):
+                 pcum=None, c3r=None, c3r_freeze_local=False,
+                 plain_collaboration=None,
+                 plain_collaboration_freeze_local=False):
         """ Initializes the model.
         Parameters:
             transformer: torch module of the transformer architecture.
@@ -256,6 +261,9 @@ class EnTeRTrack(nn.Module):
         self.pcum = pcum
         self.c3r = c3r
         self.c3r_freeze_local = bool(c3r_freeze_local)
+        self.plain_collaboration = plain_collaboration
+        self.plain_collaboration_freeze_local = bool(
+            plain_collaboration_freeze_local)
         self.use_search_prompt = use_search_prompt
         self.search_prompt_gate = None
         if use_search_prompt:
@@ -289,7 +297,38 @@ class EnTeRTrack(nn.Module):
                 remote_suppression_override=None,
                 c3r_packets=None,
                 c3r_context=None,
+                collaboration_feature=None,
+                plain_remote_tokens=None,
+                plain_remote_valid=None,
+                plain_remote_weights=None,
                 ):
+        if collaboration_feature is not None:
+            if self.plain_collaboration is None:
+                raise RuntimeError("Head-only collaboration requires the V1 adapter")
+            if any((
+                    self.pcum is not None,
+                    self.c3r is not None,
+                    self.search_prompt_gate is not None)):
+                raise RuntimeError(
+                    "Plain collaboration is exclusive with PCUM/C3R/search prompt")
+            feat_last = collaboration_feature
+            search_tokens = feat_last[:, -self.feat_len_s:]
+            collaboration = self.plain_collaboration(
+                local_tokens=search_tokens,
+                remote_tokens=plain_remote_tokens,
+                remote_valid=plain_remote_valid,
+                remote_weights=plain_remote_weights,
+            )
+            fused_feature = torch.cat((
+                feat_last[:, :-self.feat_len_s],
+                collaboration["search_tokens"],
+            ), dim=1)
+            out = self.forward_head(fused_feature, None)
+            out["plain_collaboration"] = collaboration
+            out["local_search_tokens"] = search_tokens
+            out["backbone_feat"] = feat_last
+            return out
+
         x, aux_dict = self.backbone(z=template, x=search,
                                     ce_template_mask=ce_template_mask,
                                     ce_keep_rate=ce_keep_rate,
@@ -347,6 +386,15 @@ class EnTeRTrack(nn.Module):
             if self.search_prompt_gate is not None:
                 self.search_prompt_gate.eval()
             self.c3r.train(mode)
+        if (self.plain_collaboration is not None
+                and self.plain_collaboration_freeze_local):
+            self.backbone.eval()
+            self.box_head.eval()
+            if self.pcum is not None:
+                self.pcum.eval()
+            if self.search_prompt_gate is not None:
+                self.search_prompt_gate.eval()
+            self.plain_collaboration.train(mode)
         return self
 
     def forward_head(self, cat_feature, gt_score_map=None, prompt_map=None, prompt_gate_input=None,
@@ -421,7 +469,15 @@ def build_entertrack(cfg, training=True):
     pretrain_file = getattr(cfg.MODEL, "PRETRAIN_FILE", "")
     pretrain_path = ""
 
-    if pretrain_file:
+    plain_enabled = bool(getattr(getattr(
+        cfg.MODEL, "PLAIN_COLLABORATION", None), "ENABLED", False))
+    b0_checkpoint = getattr(cfg, "B0_CHECKPOINT", "")
+    if plain_enabled and b0_checkpoint:
+        pretrain_file = b0_checkpoint
+        repository_root = os.path.normpath(os.path.join(current_dir, "../../.."))
+        pretrain_path = b0_checkpoint if os.path.isabs(b0_checkpoint) \
+            else os.path.join(repository_root, b0_checkpoint)
+    elif pretrain_file:
         pretrain_path = pretrain_file if os.path.isabs(pretrain_file) \
             else os.path.join(pretrained_path, pretrain_file)
 
@@ -465,6 +521,19 @@ def build_entertrack(cfg, training=True):
             raise RuntimeError("C3R configs must disable PCUM and search-prompt fusion")
         c3r = build_c3r(cfg, token_dim=hidden_dim)
 
+    plain_collaboration = None
+    if getattr(getattr(
+            cfg.MODEL, "PLAIN_COLLABORATION", None), "ENABLED", False):
+        if (pcum is not None or c3r is not None
+                or getattr(cfg.MODEL, "USE_SEARCH_PROMPT", False)):
+            raise RuntimeError(
+                "Plain collaboration requires PCUM/C3R/search prompt off")
+        if cfg.MODEL.BACKBONE.TYPE != "vit_tiny_patch16_224_half":
+            raise RuntimeError(
+                "Plain collaboration V1 requires the Plain ViT-Tiny backbone")
+        plain_collaboration = build_plain_collaboration(
+            cfg, token_dim=hidden_dim)
+
     model = EnTeRTrack(
         backbone,
         box_head,
@@ -477,9 +546,20 @@ def build_entertrack(cfg, training=True):
         c3r=c3r,
         c3r_freeze_local=bool(getattr(
             getattr(cfg.TRAIN, "C3R", None), "FREEZE_LOCAL", False)),
+        plain_collaboration=plain_collaboration,
+        plain_collaboration_freeze_local=bool(getattr(
+            getattr(cfg.TRAIN, "PLAIN_COLLABORATION", None),
+            "FREEZE_LOCAL", False)),
     )
 
     if pretrain_file and training and pretrain_path and os.path.isfile(pretrain_path):
+        if plain_collaboration is not None:
+            report = load_plain_collaboration_initialization(
+                model, pretrain_path)
+            print('Load frozen B0 core for Plain Collaboration V1: ' + pretrain_path)
+            print('strict full load: ', report["strict_full_load"])
+            print('fresh adapter keys: ', report["fresh_adapter_key_count"])
+            return model
         if c3r is not None:
             report = load_c3r_initialization(model, pretrain_path)
             print('Load C3R frozen local core from: ' + pretrain_path)

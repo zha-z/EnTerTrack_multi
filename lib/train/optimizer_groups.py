@@ -1,5 +1,5 @@
 def build_optimizer_param_groups(net, cfg, verbose=False):
-    """Build disjoint head, backbone, and PCUM parameter groups."""
+    """Build disjoint model parameter groups."""
     named_trainable = [
         (name, parameter) for name, parameter in net.named_parameters()
         if parameter.requires_grad
@@ -16,13 +16,18 @@ def build_optimizer_param_groups(net, cfg, verbose=False):
         (name, parameter) for name, parameter in named_trainable
         if canonical_name(name).startswith("c3r.")
     ]
+    plain_collaboration_named = [
+        (name, parameter) for name, parameter in named_trainable
+        if canonical_name(name).startswith("plain_collaboration.")
+    ]
     backbone_named = [
         (name, parameter) for name, parameter in named_trainable
         if canonical_name(name).startswith("backbone.")
     ]
     other_named = [
         (name, parameter) for name, parameter in named_trainable
-        if not canonical_name(name).startswith(("backbone.", "pcum.", "c3r."))
+        if not canonical_name(name).startswith((
+            "backbone.", "pcum.", "c3r.", "plain_collaboration."))
     ]
 
     partial_adaptation = bool(getattr(
@@ -52,6 +57,9 @@ def build_optimizer_param_groups(net, cfg, verbose=False):
              getattr(cfg.TRAIN, "PCUM_LR", cfg.TRAIN.LR * 0.1)),
             ("c3r", c3r_named,
              getattr(getattr(cfg.TRAIN, "C3R", {}), "LR", cfg.TRAIN.LR)),
+            ("plain_collaboration", plain_collaboration_named,
+             getattr(getattr(cfg.TRAIN, "PLAIN_COLLABORATION", {}),
+                     "LR", cfg.TRAIN.LR)),
         ]
     else:
         group_specs = [
@@ -62,6 +70,9 @@ def build_optimizer_param_groups(net, cfg, verbose=False):
              getattr(cfg.TRAIN, "PCUM_LR", cfg.TRAIN.LR * 0.1)),
             ("c3r", c3r_named,
              getattr(getattr(cfg.TRAIN, "C3R", {}), "LR", cfg.TRAIN.LR)),
+            ("plain_collaboration", plain_collaboration_named,
+             getattr(getattr(cfg.TRAIN, "PLAIN_COLLABORATION", {}),
+                     "LR", cfg.TRAIN.LR)),
         ]
     groups = [
         {

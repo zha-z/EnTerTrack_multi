@@ -13,6 +13,7 @@ from ...utils.heapmap_utils import generate_heatmap
 from ...utils.ce_utils import generate_mask_cond, adjust_keep_rate, adjust_temperature
 from lib.models.entertrack.pcum import PromptConsistencyLoss, build_pseudo_remote_prompts
 from lib.models.entertrack.c3r import CommunicationPerturbation, gate_ranking_loss
+from .plain_collaboration import forward_plain_collaboration
 
 
 class EnTeRTrackActorThreeMDOT(BaseActor):
@@ -519,6 +520,14 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
             and self._num_views(data) >= 3
         )
 
+    def _use_plain_collaboration(self, data):
+        return (
+            self._get_cfg_value("MODEL.PLAIN_COLLABORATION.ENABLED", False)
+            and self._get_cfg_value(
+                "TRAIN.PLAIN_COLLABORATION.ENABLED", False)
+            and self._num_views(data) >= 3
+        )
+
     def _use_c3r(self, data):
         return (
             self._get_cfg_value("MODEL.C3R.ENABLED", False)
@@ -542,7 +551,7 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
         )
 
     def _plain_multiview_diagnostics(self, output):
-        """Assert that the B0-ABC path is a complete, collaboration-free ViT."""
+        """Assert complete Plain ViT tokens and audit optional V1 collaboration."""
         if not self._get_cfg_value(
                 "TRAIN.MULTIVIEW.DIAGNOSTICS_ENABLED", False):
             return {}
@@ -601,7 +610,8 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
                 or pred_boxes.shape[-1] != 4):
             raise RuntimeError("B0-ABC-Plain CENTER bbox shape is invalid")
 
-        return {
+        collaboration = output.get("plain_collaboration", None)
+        status = {
             "Plain/search_tokens": float(expected_search),
             "Plain/template_tokens": float(expected_template),
             "Plain/total_tokens": float(feature.shape[1]),
@@ -611,9 +621,27 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
             "Plain/bbox_dim": float(pred_boxes.shape[-1]),
             "Plain/pcum_present": 0.0,
             "Plain/c3r_present": 0.0,
-            "Plain/remote_state_present": 0.0,
+            "Plain/remote_state_present": float(collaboration is not None),
             "Plain/pruning_present": 0.0,
         }
+        if collaboration is not None:
+            if getattr(network, "plain_collaboration", None) is None:
+                raise RuntimeError("V1 output exists without a model adapter")
+            weights = collaboration.get("remote_weights", None)
+            if not torch.is_tensor(weights) or weights.shape[1] != 2:
+                raise RuntimeError("V1 must provide two remote weights per receiver")
+            status.update({
+                "V1/used_remote": float(collaboration["used_remote"]),
+                "V1/valid_remote_count": float(
+                    collaboration["valid_remote_count"].float().mean().item()),
+                "V1/residual_norm": float(
+                    collaboration["residual_norm"].detach().item()),
+                "V1/relative_residual_norm": float(
+                    collaboration["relative_residual_norm"].detach().item()),
+                "V1/residual_scale": float(
+                    collaboration["residual_scale"].detach().item()),
+            })
+        return status
 
     def _multiview_backbone_diagnostics(self, output, data):
         self.last_arp_sample_diagnostics = []
@@ -991,6 +1019,8 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
         """
         单机 forward：只取第 0 个视角。
         """
+        if self._use_plain_collaboration(data):
+            return forward_plain_collaboration(self, net, data)
         if self._use_c3r(data):
             return self.forward_pass_c3r(net, data)
         if self._use_real_multiview_pcum(data):
