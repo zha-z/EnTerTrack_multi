@@ -1,0 +1,10 @@
+BASE_CONFIG: plain_collaboration_v1
+EXPERIMENT_NAME: B0-ABC-Plain-Collaboration-V1-E1.5-Sender-Counterfactual
+
+TEST:
+  PLAIN_COLLABORATION:
+    ENABLED: true
+    SAFE_COMMIT: true
+    SAVE_DIAGNOSTICS: true
+    SAVE_COUNTERFACTUAL_DIAGNOSTICS: false
+    SAVE_SENDER_COUNTERFACTUAL_DIAGNOSTICS: true

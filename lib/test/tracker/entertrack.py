@@ -535,6 +535,13 @@ class EnTeRTrack(BaseTracker):
             plain_test_cfg, "SAFE_COMMIT", False))
         self.plain_collaboration_counterfactual_diagnostics = bool(getattr(
             plain_test_cfg, "SAVE_COUNTERFACTUAL_DIAGNOSTICS", False))
+        self.plain_collaboration_sender_counterfactual_diagnostics = bool(
+            getattr(
+                plain_test_cfg,
+                "SAVE_SENDER_COUNTERFACTUAL_DIAGNOSTICS",
+                False,
+            ))
+        self._plain_collaboration_local_forward_count = 0
         if self.plain_collaboration_safe_commit and not self.plain_collaboration_enabled:
             raise RuntimeError(
                 "Plain Collaboration SAFE_COMMIT requires collaboration inference")
@@ -542,6 +549,14 @@ class EnTeRTrack(BaseTracker):
                 and not self.plain_collaboration_enabled):
             raise RuntimeError(
                 "Plain Collaboration counterfactual diagnostics require inference")
+        if (self.plain_collaboration_sender_counterfactual_diagnostics
+                and not self.plain_collaboration_enabled):
+            raise RuntimeError(
+                "Plain Collaboration sender counterfactuals require inference")
+        if (self.plain_collaboration_sender_counterfactual_diagnostics
+                and not self.plain_collaboration_safe_commit):
+            raise RuntimeError(
+                "Plain Collaboration sender counterfactuals require SAFE_COMMIT")
         if self.plain_collaboration_enabled:
             if self.network.plain_collaboration is None:
                 raise RuntimeError(
@@ -1942,6 +1957,8 @@ class EnTeRTrack(BaseTracker):
         if not self.plain_collaboration_enabled:
             raise RuntimeError(
                 "Plain Collaboration local candidate requested while disabled")
+        self._plain_collaboration_local_forward_count = int(getattr(
+            self, "_plain_collaboration_local_forward_count", 0)) + 1
         candidate = self._run_candidate(
             image=image,
             search_factor=self.params.search_factor,
@@ -1974,7 +1991,7 @@ class EnTeRTrack(BaseTracker):
     def plain_collaboration_candidate(
             self, local_candidate, remote_candidates, receiver_view,
             sender_views, frame_id, target_id=""):
-        """Fuse two synchronized remote final-search features and rerun head."""
+        """Fuse synchronized remote final-search features and rerun the head."""
         if not self.plain_collaboration_enabled:
             raise RuntimeError(
                 "Plain Collaboration candidate requested while disabled")
@@ -1985,7 +2002,22 @@ class EnTeRTrack(BaseTracker):
             raise ValueError("Plain Collaboration receiver must be A, B, or C")
         expected_senders = tuple(
             view for view in ("A", "B", "C") if view != receiver_view)
-        if sender_views != expected_senders or len(remote_candidates) != 2:
+        sender_diagnostic = bool(getattr(
+            self,
+            "plain_collaboration_sender_counterfactual_diagnostics",
+            False,
+        ))
+        if sender_diagnostic:
+            canonical_subset = tuple(
+                view for view in expected_senders if view in sender_views)
+            if (len(remote_candidates) not in (1, 2)
+                    or len(remote_candidates) != len(sender_views)
+                    or len(set(sender_views)) != len(sender_views)
+                    or sender_views != canonical_subset):
+                raise ValueError(
+                    "Sender counterfactual requires a canonical one/two-sender "
+                    "subset of {}".format(expected_senders))
+        elif sender_views != expected_senders or len(remote_candidates) != 2:
             raise ValueError(
                 "Plain Collaboration requires canonical two-sender order {}"
                 .format(expected_senders))
@@ -2012,10 +2044,13 @@ class EnTeRTrack(BaseTracker):
         remote_valid = torch.isfinite(remote_tokens).flatten(2).all(dim=2)
         if not bool(remote_valid.all().item()):
             raise RuntimeError(
-                "Plain Collaboration requires two finite remote senders")
+                "Plain Collaboration requires finite remote senders")
 
         state_digest_before = None
-        if getattr(self, "plain_collaboration_counterfactual_diagnostics", False):
+        state_audit_enabled = bool(
+            getattr(self, "plain_collaboration_counterfactual_diagnostics", False)
+            or sender_diagnostic)
+        if state_audit_enabled:
             state_digest_before = self.fcvc_persistent_state_digest()
         with torch.no_grad():
             head_output = self.network(
@@ -2026,7 +2061,8 @@ class EnTeRTrack(BaseTracker):
                 plain_remote_tokens=remote_tokens,
                 plain_remote_valid=remote_valid,
             )
-        if getattr(self, "plain_collaboration_counterfactual_diagnostics", False):
+        state_digest_after = None
+        if state_audit_enabled:
             state_digest_after = self.fcvc_persistent_state_digest()
             if state_digest_after != state_digest_before:
                 raise RuntimeError(
@@ -2037,9 +2073,9 @@ class EnTeRTrack(BaseTracker):
                 "Plain Collaboration head output is missing diagnostics")
         valid_remote_count = collaboration["valid_remote_count"]
         if valid_remote_count.numel() != 1 or int(
-                valid_remote_count.detach().cpu().item()) != 2:
+                valid_remote_count.detach().cpu().item()) != len(remote_candidates):
             raise RuntimeError(
-                "Plain Collaboration did not use both remote senders")
+                "Plain Collaboration remote count did not match the branch")
         if not bool(collaboration.get("used_remote", False)):
             raise RuntimeError("Plain Collaboration adapter bypassed remote input")
 
@@ -2076,16 +2112,18 @@ class EnTeRTrack(BaseTracker):
             output = {"target_bbox": target_bbox}
 
         weights = collaboration["remote_weights"].detach().reshape(-1).cpu()
+        weight_values = [float(value.item()) for value in weights]
         diagnostics = {
             "frame_id": int(frame_id),
             "receiver_view": receiver_view,
             "sender_view_0": sender_views[0],
-            "sender_view_1": sender_views[1],
+            "sender_view_1": sender_views[1] if len(sender_views) > 1 else "",
             "used_remote": True,
-            "valid_remote_count": 2,
+            "valid_remote_count": len(remote_candidates),
             "search_token_count": int(local_search.shape[1]),
-            "sender_weight_0": float(weights[0].item()),
-            "sender_weight_1": float(weights[1].item()),
+            "sender_weight_0": weight_values[0],
+            "sender_weight_1": (
+                weight_values[1] if len(weight_values) > 1 else float("nan")),
             "residual_norm": self._plain_scalar(
                 collaboration["residual_norm"]),
             "relative_residual_norm": self._plain_scalar(
@@ -2187,10 +2225,123 @@ class EnTeRTrack(BaseTracker):
             "used_remote": True,
             "plain_collaboration_diagnostics": diagnostics,
             "_plain_local_candidate": local_candidate,
+            "_plain_state_digest_before": state_digest_before,
+            "_plain_state_digest_after": state_digest_after,
         })
         if counterfactual is not None:
             candidate["plain_collaboration_counterfactual"] = counterfactual
         return candidate
+
+    @staticmethod
+    def _plain_bbox_motion_metrics(candidate):
+        bbox = [float(value) for value in candidate["target_bbox"]]
+        previous = candidate.get("prev_bbox")
+        if previous is None:
+            return 0.0, 0.0
+        previous = [float(value) for value in previous]
+        center_motion = math.hypot(
+            bbox[0] + 0.5 * bbox[2] - previous[0] - 0.5 * previous[2],
+            bbox[1] + 0.5 * bbox[3] - previous[1] - 0.5 * previous[3],
+        )
+        current_area = max(bbox[2] * bbox[3], 1e-12)
+        previous_area = max(previous[2] * previous[3], 1e-12)
+        return center_motion, math.log(current_area / previous_area)
+
+    def plain_collaboration_sender_counterfactual_row(
+            self, local_candidate, branch_candidate, remote_candidates,
+            receiver_view, sender_views, branch_name, frame_id, target_id,
+            state_digest_before):
+        """Build one prediction-only branch row; never reads annotations."""
+        if not getattr(
+                self,
+                "plain_collaboration_sender_counterfactual_diagnostics",
+                False):
+            raise RuntimeError("sender counterfactual diagnostics are disabled")
+        sender_views = tuple(sender_views)
+        remote_candidates = tuple(remote_candidates)
+        if len(sender_views) != len(remote_candidates):
+            raise ValueError("sender view/candidate counts differ")
+
+        def scalar_metrics(candidate):
+            bbox = [float(value) for value in candidate["target_bbox"]]
+            return {
+                "bbox": bbox,
+                "max_score": self._score_value(candidate["max_score"]),
+                "apce": self._score_value(candidate["apce"]),
+                "entropy": normalized_response_entropy(candidate.get("response")),
+                "area": max(bbox[2] * bbox[3], 1e-12),
+                "center": (bbox[0] + 0.5 * bbox[2], bbox[1] + 0.5 * bbox[3]),
+            }
+
+        local = scalar_metrics(local_candidate)
+        branch = scalar_metrics(branch_candidate)
+        local_motion, local_scale = self._plain_bbox_motion_metrics(
+            local_candidate)
+        diagnostics = branch_candidate.get("plain_collaboration_diagnostics", {})
+        row = {
+            "target_id": str(target_id),
+            "frame_id": int(frame_id),
+            "receiver_view": str(receiver_view),
+            "branch_name": str(branch_name),
+            "sender_views": "|".join(sender_views),
+            "uses_gt": False,
+            "safe_commit": True,
+            "search_token_count": int(self.network.feat_len_s),
+            "remote_count": len(remote_candidates),
+            "local_max_score": local["max_score"],
+            "local_apce": local["apce"],
+            "local_entropy": local["entropy"],
+            "local_center_motion": local_motion,
+            "local_scale_change": local_scale,
+            "branch_max_score": branch["max_score"],
+            "branch_apce": branch["apce"],
+            "branch_entropy": branch["entropy"],
+            "center_displacement": math.hypot(
+                branch["center"][0] - local["center"][0],
+                branch["center"][1] - local["center"][1]),
+            "scale_difference": math.log(branch["area"] / local["area"]),
+            "score_delta": branch["max_score"] - local["max_score"],
+            "apce_delta": branch["apce"] - local["apce"],
+            "residual_norm": float(diagnostics.get("residual_norm", 0.0)),
+            "relative_residual_norm": float(
+                diagnostics.get("relative_residual_norm", 0.0)),
+            "residual_scale": float(diagnostics.get("residual_scale", 0.0)),
+            "sender_weight_0": float(
+                diagnostics.get("sender_weight_0", 0.0)),
+            "sender_weight_1": float(
+                diagnostics.get("sender_weight_1", 0.0)),
+            "persistent_state_digest_before": state_digest_before,
+            "persistent_state_digest_after": (
+                branch_candidate.get("_plain_state_digest_after")
+                if remote_candidates else state_digest_before),
+        }
+        for prefix, values in (("local", local), ("branch", branch)):
+            for index, key in enumerate(("x", "y", "w", "h")):
+                row["{}_bbox_{}".format(prefix, key)] = values["bbox"][index]
+        for slot in range(2):
+            prefix = "sender_{}".format(slot)
+            if slot < len(remote_candidates):
+                candidate = remote_candidates[slot]
+                values = scalar_metrics(candidate)
+                motion, scale = self._plain_bbox_motion_metrics(candidate)
+                row.update({
+                    prefix + "_view": sender_views[slot],
+                    prefix + "_max_score": values["max_score"],
+                    prefix + "_apce": values["apce"],
+                    prefix + "_entropy": values["entropy"],
+                    prefix + "_bbox_motion": motion,
+                    prefix + "_scale_change": scale,
+                })
+            else:
+                row.update({
+                    prefix + "_view": "",
+                    prefix + "_max_score": float("nan"),
+                    prefix + "_apce": float("nan"),
+                    prefix + "_entropy": float("nan"),
+                    prefix + "_bbox_motion": float("nan"),
+                    prefix + "_scale_change": float("nan"),
+                })
+        return row
 
     def plain_collaboration_finalize_frame(
             self, local_candidate, collaborative_candidate=None,

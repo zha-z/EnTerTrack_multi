@@ -1,0 +1,93 @@
+{
+  "artifact_date": "2026-08-27",
+  "branch": "feature/pcum-cross-layer-arp",
+  "source_parent_commit": "affcd40c67e31ca976164fd92f35197ffaa61cf2",
+  "artifact_commit": "resolve with git log -- docs/results/plain_collaboration_sender_counterfactual_20260827/provenance.json",
+  "dataset": {
+    "name": "threemdot_val",
+    "target_count": 5,
+    "sequence_count": 15,
+    "receiver_frame_groups": 14112,
+    "valid_receiver_frames": 13513,
+    "official_test_used": false
+  },
+  "checkpoint": {
+    "path": "output/diagnostics/plain_collaboration_v1/e1_run_20260827_seed42_4gpu_r001/checkpoints/train/entertrack/plain_collaboration_v1/EnTeRTrack_ep0025.pth.tar",
+    "sha256": "0607e8dcd05d9732a0058bb7a3d9e356474dbeb219a65e0472ac83a83d58ad40",
+    "epoch": 25
+  },
+  "run": {
+    "tracker_param": "plain_collaboration_v1_e15_sender_counterfactual",
+    "runid": 28315,
+    "gpu": 0,
+    "threads": 5,
+    "results_dir": "output/test/tracking_results/entertrack/plain_collaboration_v1_e15_sender_counterfactual_28315",
+    "exit_code": 0
+  },
+  "counterfactual": {
+    "branches": [
+      "local",
+      "sender0_only",
+      "sender1_only",
+      "both"
+    ],
+    "branches_per_group": 4,
+    "prediction_rows": 56448,
+    "local_backbone_forwards_per_receiver_frame": 1,
+    "safe_commit": true,
+    "default_report_branch": "both",
+    "persistent_state_branch": "local",
+    "search_token_count": 256
+  },
+  "causality": {
+    "runtime_uses_gt": false,
+    "prediction_frozen_before_gt_join": true,
+    "prediction_file": "docs/results/plain_collaboration_sender_counterfactual_20260827/prediction_only_sender_counterfactual.csv",
+    "prediction_sha256": "75ebb3cb292202346619e6f81cc46d050fa394a73e7c0d01ad9376545ba95f43",
+    "posthoc_gt_join_dataset": "threemdot_val",
+    "helpful_delta_iou_threshold": 0.02,
+    "harmful_delta_iou_threshold": -0.02,
+    "oracle_is_gt_upper_bound_only": true
+  },
+  "integrity": {
+    "active_prediction_rows": 56388,
+    "initialization_rows": 60,
+    "persistent_state_mutations": 0,
+    "uses_gt_true_rows": 0,
+    "local_bbox_mismatch_vs_d0_local": 0,
+    "both_bbox_mismatch_vs_d0_safe": 0,
+    "both_bbox_mismatch_vs_saved_result": 0
+  },
+  "evaluation": {
+    "protocol": "OSTrack calc_seq_err_robust",
+    "implementation": "lib/test/analysis/fcvc_results.py::_curves",
+    "uses_target_visible": true,
+    "sequence_macro_average": true,
+    "remote_help_available_ratio": 0.11884851624361725,
+    "local_auc": 0.6488564254894907,
+    "both_auc": 0.6489428002241017,
+    "oracle_single_auc": 0.662076458365821,
+    "oracle_4_auc": 0.6625730859466515
+  },
+  "selector_diagnostic": {
+    "model": "LogisticRegression",
+    "sklearn": "1.1.3",
+    "cv": "leave-one-target-out",
+    "target_folds": 5,
+    "runtime_deployment": false
+  },
+  "environment": {
+    "python": "3.8.20",
+    "torch": "2.4.1+cu121",
+    "cuda_runtime": "12.1",
+    "gpu_model_used_for_rollout": "NVIDIA GeForce RTX 4090"
+  },
+  "scope": {
+    "training_run": false,
+    "adapter_modified": false,
+    "residual_scale_changed": false,
+    "representation_changed": false,
+    "learned_gate_added": false,
+    "official_test_run": false
+  }
+}

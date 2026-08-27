@@ -1,5 +1,6 @@
 import copy
 import csv
+import math
 import os
 import sys
 import tempfile
@@ -273,6 +274,26 @@ class PlainCollaborationIntegrationTests(unittest.TestCase):
             self.assertFalse(local_cfg.MODEL.FCVC.ENABLED)
             self.assertEqual(local_cfg.MODEL.BACKBONE.CE_LOC, [])
 
+    def test_e15_sender_counterfactual_config_is_safe_and_default_off(self):
+        self.assertFalse(
+            cfg.TEST.PLAIN_COLLABORATION
+            .SAVE_SENDER_COUNTERFACTUAL_DIAGNOSTICS)
+        local_cfg = copy.deepcopy(cfg)
+        update_config_from_file(
+            "experiments/entertrack/"
+            "plain_collaboration_v1_e15_sender_counterfactual.yaml",
+            base_cfg=local_cfg,
+        )
+        plain = local_cfg.TEST.PLAIN_COLLABORATION
+        self.assertTrue(local_cfg.MODEL.PLAIN_COLLABORATION.ENABLED)
+        self.assertTrue(plain.ENABLED)
+        self.assertTrue(plain.SAFE_COMMIT)
+        self.assertTrue(plain.SAVE_SENDER_COUNTERFACTUAL_DIAGNOSTICS)
+        self.assertFalse(plain.SAVE_COUNTERFACTUAL_DIAGNOSTICS)
+        self.assertFalse(local_cfg.MODEL.PCUM.ENABLED)
+        self.assertFalse(local_cfg.MODEL.C3R.ENABLED)
+        self.assertFalse(local_cfg.MODEL.FCVC.ENABLED)
+
 
 class PlainCollaborationInferenceTests(unittest.TestCase):
     @staticmethod
@@ -309,6 +330,7 @@ class PlainCollaborationInferenceTests(unittest.TestCase):
         runtime.state = [10.0, 10.0, 20.0, 20.0]
         runtime.plain_collaboration_safe_commit = False
         runtime.plain_collaboration_counterfactual_diagnostics = False
+        runtime.plain_collaboration_sender_counterfactual_diagnostics = False
         runtime._decode_prediction = lambda output, resize_factor, return_score: (
             [0.0, 0.0, 20.0, 20.0],
             torch.tensor([[0.5, 0.5, 0.25, 0.25]]),
@@ -383,6 +405,44 @@ class PlainCollaborationInferenceTests(unittest.TestCase):
                 sender_views=("C", "B"),
                 frame_id=1,
             )
+
+    def test_single_sender_is_diagnostic_only_and_prediction_only(self):
+        runtime = self._runtime_tracker()
+        local = self._candidate(1.0)
+        remote = self._candidate(2.0)
+        with self.assertRaisesRegex(ValueError, "canonical two-sender order"):
+            runtime.plain_collaboration_candidate(
+                local, (remote,), "A", ("B",), frame_id=1)
+
+        runtime.plain_collaboration_safe_commit = True
+        runtime.plain_collaboration_sender_counterfactual_diagnostics = True
+        digest = runtime.fcvc_persistent_state_digest()
+        candidate = runtime.plain_collaboration_candidate(
+            local, (remote,), "A", ("B",), frame_id=1, target_id="T0")
+        diagnostic = candidate["plain_collaboration_diagnostics"]
+        self.assertEqual(diagnostic["valid_remote_count"], 1)
+        self.assertAlmostEqual(diagnostic["sender_weight_0"], 1.0)
+        self.assertTrue(math.isnan(diagnostic["sender_weight_1"]))
+        self.assertEqual(runtime.fcvc_persistent_state_digest(), digest)
+        row = runtime.plain_collaboration_sender_counterfactual_row(
+            local_candidate=local,
+            branch_candidate=candidate,
+            remote_candidates=(remote,),
+            receiver_view="A",
+            sender_views=("B",),
+            branch_name="sender0_only",
+            frame_id=1,
+            target_id="T0",
+            state_digest_before=digest,
+        )
+        self.assertEqual(row["remote_count"], 1)
+        self.assertEqual(row["sender_0_view"], "B")
+        self.assertEqual(row["sender_1_view"], "")
+        self.assertFalse(row["uses_gt"])
+        self.assertEqual(
+            row["persistent_state_digest_before"],
+            row["persistent_state_digest_after"],
+        )
 
     def test_runtime_rejects_checkpoint_without_adapter(self):
         runtime = RuntimeEnTeRTrack.__new__(RuntimeEnTeRTrack)

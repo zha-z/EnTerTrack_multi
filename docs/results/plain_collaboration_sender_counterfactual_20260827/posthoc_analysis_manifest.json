@@ -1,0 +1,12 @@
+{
+  "dataset": "threemdot_val",
+  "harmful_threshold": -0.02,
+  "helpful_threshold": 0.02,
+  "oracle_is_gt_upper_bound_only": true,
+  "phase": "posthoc_gt_join_and_analysis",
+  "prediction_rows": 56448,
+  "prediction_sha256_verified": "75ebb3cb292202346619e6f81cc46d050fa394a73e7c0d01ad9376545ba95f43",
+  "receiver_frame_groups": 14112,
+  "remote_help_available_ratio": 0.11884851624361725,
+  "valid_receiver_frames": 13513
+}

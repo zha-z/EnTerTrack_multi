@@ -1,0 +1,88 @@
+{
+  "branches_per_group": 4,
+  "phase": "prediction_freeze_before_gt_join",
+  "prediction_file": "docs/results/plain_collaboration_sender_counterfactual_20260827/prediction_only_sender_counterfactual.csv",
+  "prediction_rows": 56448,
+  "prediction_sha256": "75ebb3cb292202346619e6f81cc46d050fa394a73e7c0d01ad9376545ba95f43",
+  "receiver_frame_groups": 14112,
+  "results_dir": "output/test/tracking_results/entertrack/plain_collaboration_v1_e15_sender_counterfactual_28315",
+  "schema_version": 1,
+  "source_files": [
+    {
+      "path": "output/test/tracking_results/entertrack/plain_collaboration_v1_e15_sender_counterfactual_28315/md3016-1_plain_collaboration_sender_counterfactual.csv",
+      "rows": 3880,
+      "sha256": "e2817d276daaa38e7d0ecf1a691c4acc728bfd186d0f1576eeff4f68f7095a5e"
+    },
+    {
+      "path": "output/test/tracking_results/entertrack/plain_collaboration_v1_e15_sender_counterfactual_28315/md3016-2_plain_collaboration_sender_counterfactual.csv",
+      "rows": 3880,
+      "sha256": "5a3914cf2c727c89c48b031bf09eb845a8014b9322b9d4af814e7e00485f73d0"
+    },
+    {
+      "path": "output/test/tracking_results/entertrack/plain_collaboration_v1_e15_sender_counterfactual_28315/md3016-3_plain_collaboration_sender_counterfactual.csv",
+      "rows": 3880,
+      "sha256": "2412c1ec1502eadff8f32b4c2876cd581bd9191a41492fe376a705deb700c6a7"
+    },
+    {
+      "path": "output/test/tracking_results/entertrack/plain_collaboration_v1_e15_sender_counterfactual_28315/md3027-1_plain_collaboration_sender_counterfactual.csv",
+      "rows": 4544,
+      "sha256": "8b708cc5ad2da27f82ad042dd62846e4a8f7c908b2f5887d282767a9c5c4a9eb"
+    },
+    {
+      "path": "output/test/tracking_results/entertrack/plain_collaboration_v1_e15_sender_counterfactual_28315/md3027-2_plain_collaboration_sender_counterfactual.csv",
+      "rows": 4544,
+      "sha256": "6e36d3dd2a00b23643a4f7ba0671a9147982f4a2212614f0a3354e04330ba11c"
+    },
+    {
+      "path": "output/test/tracking_results/entertrack/plain_collaboration_v1_e15_sender_counterfactual_28315/md3027-3_plain_collaboration_sender_counterfactual.csv",
+      "rows": 4544,
+      "sha256": "d2597a9f778268219709960171fa9e73ed3b52172d4b54e7249d95cd3d5f0aa3"
+    },
+    {
+      "path": "output/test/tracking_results/entertrack/plain_collaboration_v1_e15_sender_counterfactual_28315/md3034-1_plain_collaboration_sender_counterfactual.csv",
+      "rows": 3636,
+      "sha256": "6c0e634226a542cdae5caa819f0b86e3b5db2e7f78838ffc934a42d0c81b54ef"
+    },
+    {
+      "path": "output/test/tracking_results/entertrack/plain_collaboration_v1_e15_sender_counterfactual_28315/md3034-2_plain_collaboration_sender_counterfactual.csv",
+      "rows": 3636,
+      "sha256": "c9b485cbdbf08782088d14b9a391f1f976bbe394417ab23bb757bfffdd8832da"
+    },
+    {
+      "path": "output/test/tracking_results/entertrack/plain_collaboration_v1_e15_sender_counterfactual_28315/md3034-3_plain_collaboration_sender_counterfactual.csv",
+      "rows": 3636,
+      "sha256": "3bbc122add4421295c82a931ccfc88fcc6fe034a2fb1a277526c781fbf770b54"
+    },
+    {
+      "path": "output/test/tracking_results/entertrack/plain_collaboration_v1_e15_sender_counterfactual_28315/md3048-1_plain_collaboration_sender_counterfactual.csv",
+      "rows": 2120,
+      "sha256": "eac0cea8e4ca4339aec997c1135885b5eba2bc17fd929539746f6b0209a2c469"
+    },
+    {
+      "path": "output/test/tracking_results/entertrack/plain_collaboration_v1_e15_sender_counterfactual_28315/md3048-2_plain_collaboration_sender_counterfactual.csv",
+      "rows": 2120,
+      "sha256": "631d85e88975f8235fb2009991764bf4561be0ef2b8ac780bcd43a9bc7a516e1"
+    },
+    {
+      "path": "output/test/tracking_results/entertrack/plain_collaboration_v1_e15_sender_counterfactual_28315/md3048-3_plain_collaboration_sender_counterfactual.csv",
+      "rows": 2120,
+      "sha256": "a123c6d6589a2182328e77e996d0084d4b0281cf3f5266a81163e89a15954234"
+    },
+    {
+      "path": "output/test/tracking_results/entertrack/plain_collaboration_v1_e15_sender_counterfactual_28315/md3055-1_plain_collaboration_sender_counterfactual.csv",
+      "rows": 4636,
+      "sha256": "7f7adcf47b41622c095df03b796efc29697b6774a44832a9e55e40aab1846ea8"
+    },
+    {
+      "path": "output/test/tracking_results/entertrack/plain_collaboration_v1_e15_sender_counterfactual_28315/md3055-2_plain_collaboration_sender_counterfactual.csv",
+      "rows": 4636,
+      "sha256": "b7659f5f02a8c3f5f9a3379f5d39fb8ab8a4501481781afc072163dcdbc0fcb7"
+    },
+    {
+      "path": "output/test/tracking_results/entertrack/plain_collaboration_v1_e15_sender_counterfactual_28315/md3055-3_plain_collaboration_sender_counterfactual.csv",
+      "rows": 4636,
+      "sha256": "e79cfbe9cf854ce78b1febdb2cfa086a93138dbf39fe21262177583705943dd3"
+    }
+  ],
+  "uses_gt": false
+}

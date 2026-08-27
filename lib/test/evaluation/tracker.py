@@ -826,6 +826,13 @@ class Tracker:
             plain_remote_enabled
             and getattr(
                 plain_test_cfg, "SAVE_COUNTERFACTUAL_DIAGNOSTICS", False))
+        plain_save_sender_counterfactual = bool(
+            plain_remote_enabled
+            and getattr(
+                plain_test_cfg,
+                "SAVE_SENDER_COUNTERFACTUAL_DIAGNOSTICS",
+                False,
+            ))
         plain_safe_commit_values = tuple(bool(getattr(
             item, "plain_collaboration_safe_commit", False)) for item in (
                 tracker, tracker2, tracker3))
@@ -856,6 +863,19 @@ class Tracker:
                     raise RuntimeError(
                         "Plain Collaboration tracker methods are missing: {}"
                         .format(missing))
+            if plain_save_sender_counterfactual:
+                for active_tracker in (tracker, tracker2, tracker3):
+                    if not hasattr(
+                            active_tracker,
+                            "plain_collaboration_sender_counterfactual_row"):
+                        raise RuntimeError(
+                            "sender counterfactual row builder is missing")
+                    if not bool(getattr(
+                            active_tracker,
+                            "plain_collaboration_safe_commit",
+                            False)):
+                        raise RuntimeError(
+                            "sender counterfactual requires SAFE_COMMIT")
             if any((
                     bool(getattr(tracker, "fcvc_enabled", False)),
                     bool(getattr(tracker, "c3r_enabled", False)),
@@ -876,11 +896,17 @@ class Tracker:
                 output_a['plain_collaboration_counterfactual'] = []
                 output_b['plain_collaboration_counterfactual'] = []
                 output_c['plain_collaboration_counterfactual'] = []
+            if plain_save_sender_counterfactual:
+                output_a['plain_collaboration_sender_counterfactual'] = []
+                output_b['plain_collaboration_sender_counterfactual'] = []
+                output_c['plain_collaboration_sender_counterfactual'] = []
             print(
                 "[Plain Collaboration V1 inference] enabled=true "
                 "search_tokens=256 senders_per_receiver=2 uses_gt=false "
-                "safe_commit={} target={}".format(
-                    str(plain_safe_commit_values[0]).lower(), target_id))
+                "safe_commit={} sender_counterfactual={} target={}".format(
+                    str(plain_safe_commit_values[0]).lower(),
+                    str(plain_save_sender_counterfactual).lower(),
+                    target_id))
         c3r_model_enabled = bool(getattr(
             getattr(tracker.cfg.MODEL, "C3R", None), "ENABLED", False))
         c3r_test_enabled = bool(getattr(
@@ -1018,7 +1044,8 @@ class Tracker:
                     "c3r_diagnostics", "c3r_source_instrumentation",
                     "c3r_aggregate_instrumentation",
                     "plain_collaboration_diagnostics",
-                    "plain_collaboration_counterfactual")
+                    "plain_collaboration_counterfactual",
+                    "plain_collaboration_sender_counterfactual")
             )
 
         def _to_float(x):
@@ -1112,6 +1139,131 @@ class Tracker:
                 for index, key in enumerate(("x", "y", "w", "h")):
                     row["{}_bbox_{}".format(prefix, key)] = bbox[index]
             return row
+
+        def _empty_plain_sender_counterfactual(receiver_view, initial_bbox):
+            sender_views = tuple(
+                view for view in ("A", "B", "C")
+                if view != receiver_view)
+            bbox = [float(value) for value in initial_bbox]
+            rows = []
+            branches = (
+                ("local", ()),
+                ("sender0_only", (sender_views[0],)),
+                ("sender1_only", (sender_views[1],)),
+                ("both", sender_views),
+            )
+            for branch_name, active_senders in branches:
+                row = {
+                    "target_id": target_id,
+                    "frame_id": 0,
+                    "receiver_view": receiver_view,
+                    "branch_name": branch_name,
+                    "sender_views": "|".join(active_senders),
+                    "uses_gt": False,
+                    "safe_commit": True,
+                    "search_token_count": 256,
+                    "remote_count": len(active_senders),
+                    "local_max_score": float("nan"),
+                    "local_apce": float("nan"),
+                    "local_entropy": float("nan"),
+                    "local_center_motion": 0.0,
+                    "local_scale_change": 0.0,
+                    "branch_max_score": float("nan"),
+                    "branch_apce": float("nan"),
+                    "branch_entropy": float("nan"),
+                    "center_displacement": 0.0,
+                    "scale_difference": 0.0,
+                    "score_delta": 0.0,
+                    "apce_delta": 0.0,
+                    "residual_norm": 0.0,
+                    "relative_residual_norm": 0.0,
+                    "residual_scale": 0.0,
+                    "sender_weight_0": 0.0,
+                    "sender_weight_1": 0.0,
+                    "persistent_state_digest_before": "initialization",
+                    "persistent_state_digest_after": "initialization",
+                }
+                for prefix in ("local", "branch"):
+                    for index, key in enumerate(("x", "y", "w", "h")):
+                        row["{}_bbox_{}".format(prefix, key)] = bbox[index]
+                for slot in range(2):
+                    prefix = "sender_{}".format(slot)
+                    sender_view = (
+                        active_senders[slot]
+                        if slot < len(active_senders) else "")
+                    row.update({
+                        prefix + "_view": sender_view,
+                        prefix + "_max_score": float("nan"),
+                        prefix + "_apce": float("nan"),
+                        prefix + "_entropy": float("nan"),
+                        prefix + "_bbox_motion": float("nan"),
+                        prefix + "_scale_change": float("nan"),
+                    })
+                rows.append(row)
+            return rows
+
+        def _plain_receiver_counterfactual(
+                active_tracker, local_candidate, remote_candidates,
+                receiver_view, sender_views, frame_id):
+            if not plain_save_sender_counterfactual:
+                both_candidate = active_tracker.plain_collaboration_candidate(
+                    local_candidate,
+                    remote_candidates,
+                    receiver_view,
+                    sender_views,
+                    frame_id,
+                    target_id=target_id,
+                )
+                return both_candidate, None
+            state_digest = active_tracker.fcvc_persistent_state_digest()
+            sender0_candidate = active_tracker.plain_collaboration_candidate(
+                local_candidate,
+                (remote_candidates[0],),
+                receiver_view,
+                (sender_views[0],),
+                frame_id,
+                target_id=target_id,
+            )
+            sender1_candidate = active_tracker.plain_collaboration_candidate(
+                local_candidate,
+                (remote_candidates[1],),
+                receiver_view,
+                (sender_views[1],),
+                frame_id,
+                target_id=target_id,
+            )
+            both_candidate = active_tracker.plain_collaboration_candidate(
+                local_candidate,
+                remote_candidates,
+                receiver_view,
+                sender_views,
+                frame_id,
+                target_id=target_id,
+            )
+            if active_tracker.fcvc_persistent_state_digest() != state_digest:
+                raise RuntimeError(
+                    "sender counterfactual branches mutated persistent state")
+            branch_specs = (
+                ("local", local_candidate, (), ()),
+                ("sender0_only", sender0_candidate,
+                 (remote_candidates[0],), (sender_views[0],)),
+                ("sender1_only", sender1_candidate,
+                 (remote_candidates[1],), (sender_views[1],)),
+                ("both", both_candidate, remote_candidates, sender_views),
+            )
+            rows = [active_tracker.plain_collaboration_sender_counterfactual_row(
+                local_candidate=local_candidate,
+                branch_candidate=branch_candidate,
+                remote_candidates=branch_remotes,
+                receiver_view=receiver_view,
+                sender_views=branch_senders,
+                branch_name=branch_name,
+                frame_id=frame_id,
+                target_id=target_id,
+                state_digest_before=state_digest,
+            ) for branch_name, branch_candidate, branch_remotes, branch_senders
+                    in branch_specs]
+            return both_candidate, rows
 
         def _payload(out, score, apce):
             return {
@@ -1559,6 +1711,10 @@ class Tracker:
                 _empty_plain_collaboration_counterfactual(
                     "A", init_info_a.get('init_bbox'))
                 if plain_save_counterfactual else None,
+            'plain_collaboration_sender_counterfactual':
+                _empty_plain_sender_counterfactual(
+                    "A", init_info_a.get('init_bbox'))
+                if plain_save_sender_counterfactual else None,
         }
         init_default_b = {
             'target_bbox': init_info_b.get('init_bbox'),
@@ -1572,6 +1728,10 @@ class Tracker:
                 _empty_plain_collaboration_counterfactual(
                     "B", init_info_b.get('init_bbox'))
                 if plain_save_counterfactual else None,
+            'plain_collaboration_sender_counterfactual':
+                _empty_plain_sender_counterfactual(
+                    "B", init_info_b.get('init_bbox'))
+                if plain_save_sender_counterfactual else None,
         }
 
         init_default_c = {
@@ -1586,6 +1746,10 @@ class Tracker:
                 _empty_plain_collaboration_counterfactual(
                     "C", init_info_c.get('init_bbox'))
                 if plain_save_counterfactual else None,
+            'plain_collaboration_sender_counterfactual':
+                _empty_plain_sender_counterfactual(
+                    "C", init_info_c.get('init_bbox'))
+                if plain_save_sender_counterfactual else None,
         }
 
         if c3r_remote_enabled:
@@ -1755,6 +1919,9 @@ class Tracker:
             )
 
             if plain_remote_enabled:
+                local_forward_counts_before = tuple(int(getattr(
+                    item, "_plain_collaboration_local_forward_count", 0))
+                    for item in (tracker, tracker2, tracker3))
                 start_time_a = time.time()
                 local_a = tracker.plain_collaboration_local_candidate(image_a)
                 local_time_a = time.time() - start_time_a
@@ -1764,35 +1931,55 @@ class Tracker:
                 start_time_c = time.time()
                 local_c = tracker3.plain_collaboration_local_candidate(image_c)
                 local_time_c = time.time() - start_time_c
+                if plain_save_sender_counterfactual:
+                    local_forward_counts_after = tuple(int(getattr(
+                        item, "_plain_collaboration_local_forward_count", 0))
+                        for item in (tracker, tracker2, tracker3))
+                    if tuple(
+                            after - before for before, after in zip(
+                                local_forward_counts_before,
+                                local_forward_counts_after)) != (1, 1, 1):
+                        raise RuntimeError(
+                            "sender counterfactual must run one local backbone "
+                            "forward per view/frame")
 
                 start_time_a = time.time()
-                collaborative_a = tracker.plain_collaboration_candidate(
-                    local_a, (local_b, local_c), "A", ("B", "C"), frame_num,
-                    target_id=target_id)
+                collaborative_a, sender_rows_a = _plain_receiver_counterfactual(
+                    tracker, local_a, (local_b, local_c), "A", ("B", "C"),
+                    frame_num)
                 out_a, max_score_a, response_APCE_a = (
                     tracker.plain_collaboration_finalize_frame(
                         local_a, collaborative_a, info=info_a,
                         debug_name="plain-v1-a"))
+                if sender_rows_a is not None:
+                    out_a["plain_collaboration_sender_counterfactual"] = (
+                        sender_rows_a)
                 time_a = local_time_a + (time.time() - start_time_a)
 
                 start_time_b = time.time()
-                collaborative_b = tracker2.plain_collaboration_candidate(
-                    local_b, (local_a, local_c), "B", ("A", "C"), frame_num,
-                    target_id=target_id)
+                collaborative_b, sender_rows_b = _plain_receiver_counterfactual(
+                    tracker2, local_b, (local_a, local_c), "B", ("A", "C"),
+                    frame_num)
                 out_b, max_score_b, response_APCE_b = (
                     tracker2.plain_collaboration_finalize_frame(
                         local_b, collaborative_b, info=info_b,
                         debug_name="plain-v1-b"))
+                if sender_rows_b is not None:
+                    out_b["plain_collaboration_sender_counterfactual"] = (
+                        sender_rows_b)
                 time_b = local_time_b + (time.time() - start_time_b)
 
                 start_time_c = time.time()
-                collaborative_c = tracker3.plain_collaboration_candidate(
-                    local_c, (local_a, local_b), "C", ("A", "B"), frame_num,
-                    target_id=target_id)
+                collaborative_c, sender_rows_c = _plain_receiver_counterfactual(
+                    tracker3, local_c, (local_a, local_b), "C", ("A", "B"),
+                    frame_num)
                 out_c, max_score_c, response_APCE_c = (
                     tracker3.plain_collaboration_finalize_frame(
                         local_c, collaborative_c, info=info_c,
                         debug_name="plain-v1-c"))
+                if sender_rows_c is not None:
+                    out_c["plain_collaboration_sender_counterfactual"] = (
+                        sender_rows_c)
                 time_c = local_time_c + (time.time() - start_time_c)
 
                 score_a_val = _to_float(max_score_a)
