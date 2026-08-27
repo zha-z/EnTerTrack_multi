@@ -52,12 +52,12 @@ def export_metrics(checkpoint, output_dir):
             columns["{}_{}".format(loader, output_name)] = epoch_history(
                 stats[loader][stat_name], epochs
             )
-    columns["lr_group0"] = epoch_history(
-        stats["train"]["LearningRate/group0"], epochs
-    )
-    columns["lr_group1"] = epoch_history(
-        stats["train"]["LearningRate/group1"], epochs
-    )
+    for group_index in range(2):
+        stat_name = "LearningRate/group{}".format(group_index)
+        if stat_name in stats["train"]:
+            columns["lr_group{}".format(group_index)] = epoch_history(
+                stats["train"][stat_name], epochs
+            )
     fieldnames = list(columns)
     with (output_dir / "training_epoch_metrics.csv").open(
         "w", newline="", encoding="utf-8"

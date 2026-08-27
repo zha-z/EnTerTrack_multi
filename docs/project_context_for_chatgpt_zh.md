@@ -221,6 +221,12 @@ Reliability v2 对已有 temporal、trajectory、state-divergence 信号做过�
 
 PCUM-v2A A0 仍可作为当前论文协作主结果：它相对相同 EnTeR/ARP 背景的 B1 有小幅提升，并优于自己的 zero/delay/none 消融。但它不是全系统最优，也不能声称解决负迁移。
 
+### Plain Collaboration V1 配对结果（2026-08-27）
+
+最终 search-feature 等权融合的 `B0-ABC-Plain-Collaboration-V1 ep25` 已完成 105/105 Three-MDOT test 序列。按同一 OSTrack evaluator，它的 AUC 为 `48.0028`；与它直接配对的 `B0-ABC-Plain-4GPU ep25` run `26025` 为 `48.9464`，差值 `-0.9435` 个百分点。逐视角差值为 A `-2.7513`、B `-1.2748`、C `+1.1955`。remote 在所有非初始化帧真实启用，但无可靠性判断的等权融合没有通过整体增益目标。
+
+这里的 E0 是 V1 实际初始化并冻结的 run `26025`，不能与上表来自其他受控 run/sampler 的 B0 `49.804` 或旧 inner-val `64.89` 混用。完整报告和 ChatGPT 可直接读取的训练/评测产物位于 [`docs/results/plain_collaboration_v1_ep25_test_20260827/REPORT_ZH.md`](results/plain_collaboration_v1_ep25_test_20260827/REPORT_ZH.md)。
+
 ## 8. 思路演化：为什么现在不能继续盲目堆模块
 
 1. 最初思路是用 PCUM 把同步远端视觉 prompt 融入本地 token。实验说明远端信息确实有价值，但收益视角不均衡，且接近一半 target/sequence 可能出现负迁移。

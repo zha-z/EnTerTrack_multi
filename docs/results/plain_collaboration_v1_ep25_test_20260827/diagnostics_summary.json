@@ -1,0 +1,55 @@
+{
+  "active_receiver_view_counts": {
+    "A": 27748,
+    "B": 27748,
+    "C": 27748
+  },
+  "active_remote_rows": 83244,
+  "active_search_token_counts": [
+    256
+  ],
+  "active_sender_weights": [
+    [
+      0.5,
+      0.5
+    ]
+  ],
+  "active_valid_remote_counts": [
+    2
+  ],
+  "bbox_diagnostic_length_mismatch_count": 0,
+  "bbox_diagnostic_length_mismatches": [],
+  "frame_rows": 83349,
+  "initial_local_only_rows": 105,
+  "paired_vs_b0": {
+    "bootstrap_samples": 100000,
+    "bootstrap_seed": 42,
+    "harmful_sequences": 77,
+    "harmful_targets": 28,
+    "improved_sequences": 24,
+    "improved_targets": 7,
+    "matched_sequences": 105,
+    "mean_auc_delta": -0.009435350029109888,
+    "target_grouped_bootstrap_auc_delta_95ci": [
+      -0.021591650288982803,
+      0.0029742373508086424
+    ],
+    "tied_sequences": 4
+  },
+  "raw_sequence_diagnostic_files": 105,
+  "relative_residual_norm": {
+    "max": 0.16278709471225739,
+    "mean": 0.11153582240932396,
+    "min": 0.06123749911785126
+  },
+  "residual_norm": {
+    "max": 31.91884994506836,
+    "mean": 21.755183043859585,
+    "min": 11.935693740844727
+  },
+  "residual_scale": {
+    "max": 0.05114510655403137,
+    "mean": 0.05114510655403137,
+    "min": 0.05114510655403137
+  }
+}
