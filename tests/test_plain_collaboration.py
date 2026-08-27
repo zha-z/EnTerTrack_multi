@@ -155,6 +155,23 @@ class PlainCollaborationMappingTests(unittest.TestCase):
         }
         validate_synchronized_abc_metadata(data, 3, 2)
 
+    def test_metadata_accepts_common_visible_shared_frame_slot(self):
+        data = {
+            "target_id": ["T0", "T1"],
+            "view_ids": [["A", "A"], ["B", "B"], ["C", "C"]],
+            "search_frame_ids": [[7, 9]],
+        }
+        validate_synchronized_abc_metadata(data, 3, 2)
+
+    def test_metadata_rejects_invalid_frame_slot_count(self):
+        data = {
+            "target_id": ["T0"],
+            "view_ids": [["A"], ["B"], ["C"]],
+            "search_frame_ids": [[7], [7]],
+        }
+        with self.assertRaisesRegex(ValueError, "one shared frame slot"):
+            validate_synchronized_abc_metadata(data, 3, 1)
+
     def test_metadata_rejects_misaligned_frame(self):
         data = {
             "target_id": ["T0"],

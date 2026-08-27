@@ -34,17 +34,29 @@ def validate_synchronized_abc_metadata(data, num_views, batch_size):
 
     frame_ids = data.get("search_frame_ids", None)
     if frame_ids is not None:
-        if len(frame_ids) < num_views:
-            raise ValueError("search_frame_ids does not contain three views")
-        for batch_index in range(batch_size):
-            synchronized = {
-                int(_metadata_item(frame_ids[view][batch_index]))
-                for view in range(num_views)
-            }
-            if len(synchronized) != 1:
-                raise ValueError(
-                    "Remote views use different search_frame_ids at batch {}"
-                    .format(batch_index))
+        frame_slots = len(frame_ids)
+        if frame_slots not in (1, num_views):
+            raise ValueError(
+                "search_frame_ids must contain one shared frame slot or "
+                "one slot per view")
+        for frame_slot in range(frame_slots):
+            if len(frame_ids[frame_slot]) != batch_size:
+                raise ValueError("search_frame_ids batch size mismatch")
+
+        # The common-visible sampler stores one shared frame id per target;
+        # LTRLoader(stack_dim=1) therefore collates it as [1, B].  Independent
+        # sampling stores [V, B], in which case synchronization must be checked
+        # explicitly before remote features are exchanged.
+        if frame_slots == num_views:
+            for batch_index in range(batch_size):
+                synchronized = {
+                    int(_metadata_item(frame_ids[view][batch_index]))
+                    for view in range(num_views)
+                }
+                if len(synchronized) != 1:
+                    raise ValueError(
+                        "Remote views use different search_frame_ids at batch {}"
+                        .format(batch_index))
 
     target_ids = data.get("target_id", None)
     if target_ids is not None and len(target_ids) != batch_size:
