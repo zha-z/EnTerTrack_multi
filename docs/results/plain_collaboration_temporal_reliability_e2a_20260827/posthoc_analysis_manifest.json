@@ -1,0 +1,14 @@
+{
+  "active_receiver_frames": 13498,
+  "active_sender_rows": 26996,
+  "dataset": "threemdot_val",
+  "non_tie_sender_rows": 4394,
+  "official_test_used": false,
+  "phase": "posthoc_gt_join_loto_oof_safe_report",
+  "posthoc_sender_rows": 28224,
+  "receiver_frames": 14112,
+  "target_folds": 5,
+  "temporal_prediction_rows": 28224,
+  "temporal_prediction_sha256_verified": "717d41c95bd8276e254f2af0baabc8e9a17f2213fe65389e176b2be9993d9a24",
+  "tracker_rollout_repeated": false
+}

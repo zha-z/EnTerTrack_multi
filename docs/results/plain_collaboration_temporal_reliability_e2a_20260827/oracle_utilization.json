@@ -1,0 +1,25 @@
+{
+  "both_safe_auc": 0.6489428002241017,
+  "communication_trigger": false,
+  "dataset": "threemdot_val",
+  "decision_case": "C",
+  "fixed_sender0_auc": 0.646705948811518,
+  "fixed_sender1_auc": 0.6504607500355848,
+  "gt_oracle_single_auc": 0.662076458365821,
+  "gt_oracle_upper_bound_only": true,
+  "local_auc": 0.6488564254894907,
+  "max_per_target_negative_delta": -0.004745540828015038,
+  "oof_temporal_selector_auc": 0.6481518365850988,
+  "oracle_headroom": 0.013220032876330223,
+  "oracle_utilization": -0.05329706143571592,
+  "preregistered_gates": {
+    "primary_auc_gain_ge_0_003": false,
+    "safety_no_target_le_minus_0_05": true,
+    "secondary_pr_above_prior": false,
+    "secondary_roc_auc_ge_0_65": false
+  },
+  "selector_gain": -0.0007045889043919562,
+  "task_a_t4_positive_rate": 0.44606281292671823,
+  "task_a_t4_pr_auc": 0.42898087272167207,
+  "task_a_t4_roc_auc": 0.4013773833280231
+}
