@@ -1,0 +1,64 @@
+{
+  "artifact_date": "2026-08-27",
+  "branch": "feature/pcum-cross-layer-arp",
+  "source_parent_commit": "862f0128a125e14d3c3c527a283cbe05c64e5b16",
+  "artifact_commit": "resolve with git log -- docs/results/plain_collaboration_v1_safe_commit_diagnostic_20260827/provenance.json",
+  "dataset": {
+    "name": "threemdot_val",
+    "target_count": 5,
+    "sequence_count": 15,
+    "official_test_used": false
+  },
+  "checkpoint": {
+    "path": "output/diagnostics/plain_collaboration_v1/e1_run_20260827_seed42_4gpu_r001/checkpoints/train/entertrack/plain_collaboration_v1/EnTeRTrack_ep0025.pth.tar",
+    "sha256": "0607e8dcd05d9732a0058bb7a3d9e356474dbeb219a65e0472ac83a83d58ad40",
+    "epoch": 25
+  },
+  "runs": {
+    "D0-local": {
+      "tracker_param": "plain_collaboration_v1_d0_local",
+      "runid": 28210,
+      "gpu": 0,
+      "summary_sha256": "244fc68cd874104aa1427306fac7310dc67e56cc460e8585f2d4d3dabe4bca3c"
+    },
+    "D0-closed-loop": {
+      "tracker_param": "plain_collaboration_v1_d0_closed_loop",
+      "runid": 28211,
+      "gpu": 1,
+      "summary_sha256": "0bb83f88c57ae2b13b69057648d9a003c91d654e6c2eb200f0fd3cef2365b409"
+    },
+    "D0-safe": {
+      "tracker_param": "plain_collaboration_v1_d0_safe",
+      "runid": 28212,
+      "gpu": 2,
+      "summary_sha256": "e1a332049120ed9350f5eff1e60b302436dce20b42838bc2d04671384fa5c048"
+    }
+  },
+  "evaluation": {
+    "protocol": "OSTrack calc_seq_err_robust",
+    "implementation": "lib/test/analysis/extract_results.py",
+    "uses_target_visible": true,
+    "sequence_macro_average": true
+  },
+  "causality": {
+    "runtime_uses_gt": false,
+    "prediction_frozen_before_gt_join": true,
+    "prediction_rows": 14112,
+    "prediction_sha256": "23f3ed852fe96a7cd3c05ab494f367a5d89512a84d4dbbab7d84d94e7ca9b7f9",
+    "posthoc_gt_join_dataset": "threemdot_val",
+    "helpful_delta_iou_threshold": 0.02,
+    "harmful_delta_iou_threshold": -0.02
+  },
+  "environment": {
+    "python": "3.8.20",
+    "torch": "2.4.1+cu121",
+    "cuda_runtime": "12.1",
+    "gpu_model": "NVIDIA GeForce RTX 4090"
+  },
+  "scope": {
+    "training_run": false,
+    "adapter_modified": false,
+    "hyperparameters_changed": false,
+    "official_test_run": false
+  }
+}

@@ -822,6 +822,16 @@ class Tracker:
         plain_save_diagnostics = bool(
             plain_remote_enabled
             and getattr(plain_test_cfg, "SAVE_DIAGNOSTICS", True))
+        plain_save_counterfactual = bool(
+            plain_remote_enabled
+            and getattr(
+                plain_test_cfg, "SAVE_COUNTERFACTUAL_DIAGNOSTICS", False))
+        plain_safe_commit_values = tuple(bool(getattr(
+            item, "plain_collaboration_safe_commit", False)) for item in (
+                tracker, tracker2, tracker3))
+        if len(set(plain_safe_commit_values)) != 1:
+            raise ValueError(
+                "Plain Collaboration SAFE_COMMIT must match across all views")
         if plain_remote_enabled:
             frame_counts = tuple(len(seq.frames) for seq in sequences)
             if len(set(frame_counts)) != 1:
@@ -862,10 +872,15 @@ class Tracker:
                 output_a['plain_collaboration_diagnostics'] = []
                 output_b['plain_collaboration_diagnostics'] = []
                 output_c['plain_collaboration_diagnostics'] = []
+            if plain_save_counterfactual:
+                output_a['plain_collaboration_counterfactual'] = []
+                output_b['plain_collaboration_counterfactual'] = []
+                output_c['plain_collaboration_counterfactual'] = []
             print(
                 "[Plain Collaboration V1 inference] enabled=true "
                 "search_tokens=256 senders_per_receiver=2 uses_gt=false "
-                "target={}".format(target_id))
+                "safe_commit={} target={}".format(
+                    str(plain_safe_commit_values[0]).lower(), target_id))
         c3r_model_enabled = bool(getattr(
             getattr(tracker.cfg.MODEL, "C3R", None), "ENABLED", False))
         c3r_test_enabled = bool(getattr(
@@ -1002,7 +1017,8 @@ class Tracker:
                     "motion_state_diagnostics", "mcr_diagnostics",
                     "c3r_diagnostics", "c3r_source_instrumentation",
                     "c3r_aggregate_instrumentation",
-                    "plain_collaboration_diagnostics")
+                    "plain_collaboration_diagnostics",
+                    "plain_collaboration_counterfactual")
             )
 
         def _to_float(x):
@@ -1039,6 +1055,63 @@ class Tracker:
                 "relative_residual_norm": 0.0,
                 "residual_scale": 0.0,
             }
+
+        def _empty_plain_collaboration_counterfactual(
+                receiver_view, initial_bbox):
+            sender_views = [
+                view for view in ("A", "B", "C") if view != receiver_view]
+            bbox = [float(value) for value in initial_bbox]
+            row = {
+                "frame_id": 0,
+                "target_id": target_id,
+                "receiver_view": receiver_view,
+                "sender_view_0": sender_views[0],
+                "sender_view_1": sender_views[1],
+                "uses_gt": False,
+                "safe_commit": plain_safe_commit_values[0],
+                "valid_remote_count": 0,
+                "search_token_count": 256,
+                "sender_weight_0": 0.0,
+                "sender_weight_1": 0.0,
+                "residual_norm": 0.0,
+                "relative_residual_norm": 0.0,
+                "residual_scale": 0.0,
+                "local_center_displacement": 0.0,
+                "local_scale_change": 0.0,
+                "local_collab_center_displacement": 0.0,
+                "local_collab_scale_difference": 0.0,
+                "persistent_state_digest_before": "initialization",
+                "persistent_state_digest_after": "initialization",
+                "next_crop_state_digest": "initialization",
+            }
+            area = bbox[2] * bbox[3]
+            for prefix in ("local", "collaborative", "sender_0", "sender_1"):
+                for index, key in enumerate(("x", "y", "w", "h")):
+                    row["{}_bbox_{}".format(prefix, key)] = (
+                        bbox[index] if prefix in ("local", "collaborative")
+                        else float("nan"))
+                row["{}_max_score".format(prefix)] = float("nan")
+                row["{}_apce".format(prefix)] = float("nan")
+                row["{}_entropy".format(prefix)] = float("nan")
+                row["{}_center_x".format(prefix)] = (
+                    bbox[0] + 0.5 * bbox[2]
+                    if prefix in ("local", "collaborative") else float("nan"))
+                row["{}_center_y".format(prefix)] = (
+                    bbox[1] + 0.5 * bbox[3]
+                    if prefix in ("local", "collaborative") else float("nan"))
+                row["{}_width".format(prefix)] = (
+                    bbox[2] if prefix in ("local", "collaborative")
+                    else float("nan"))
+                row["{}_height".format(prefix)] = (
+                    bbox[3] if prefix in ("local", "collaborative")
+                    else float("nan"))
+                row["{}_area".format(prefix)] = (
+                    area if prefix in ("local", "collaborative")
+                    else float("nan"))
+            for prefix in ("state_output", "reported_output"):
+                for index, key in enumerate(("x", "y", "w", "h")):
+                    row["{}_bbox_{}".format(prefix, key)] = bbox[index]
+            return row
 
         def _payload(out, score, apce):
             return {
@@ -1482,6 +1555,10 @@ class Tracker:
             'plain_collaboration_diagnostics':
                 _empty_plain_collaboration_diagnostic("A")
                 if plain_save_diagnostics else None,
+            'plain_collaboration_counterfactual':
+                _empty_plain_collaboration_counterfactual(
+                    "A", init_info_a.get('init_bbox'))
+                if plain_save_counterfactual else None,
         }
         init_default_b = {
             'target_bbox': init_info_b.get('init_bbox'),
@@ -1491,6 +1568,10 @@ class Tracker:
             'plain_collaboration_diagnostics':
                 _empty_plain_collaboration_diagnostic("B")
                 if plain_save_diagnostics else None,
+            'plain_collaboration_counterfactual':
+                _empty_plain_collaboration_counterfactual(
+                    "B", init_info_b.get('init_bbox'))
+                if plain_save_counterfactual else None,
         }
 
         init_default_c = {
@@ -1501,6 +1582,10 @@ class Tracker:
             'plain_collaboration_diagnostics':
                 _empty_plain_collaboration_diagnostic("C")
                 if plain_save_diagnostics else None,
+            'plain_collaboration_counterfactual':
+                _empty_plain_collaboration_counterfactual(
+                    "C", init_info_c.get('init_bbox'))
+                if plain_save_counterfactual else None,
         }
 
         if c3r_remote_enabled:
@@ -1682,26 +1767,32 @@ class Tracker:
 
                 start_time_a = time.time()
                 collaborative_a = tracker.plain_collaboration_candidate(
-                    local_a, (local_b, local_c), "A", ("B", "C"), frame_num)
+                    local_a, (local_b, local_c), "A", ("B", "C"), frame_num,
+                    target_id=target_id)
                 out_a, max_score_a, response_APCE_a = (
                     tracker.plain_collaboration_finalize_frame(
-                        collaborative_a, info=info_a, debug_name="plain-v1-a"))
+                        local_a, collaborative_a, info=info_a,
+                        debug_name="plain-v1-a"))
                 time_a = local_time_a + (time.time() - start_time_a)
 
                 start_time_b = time.time()
                 collaborative_b = tracker2.plain_collaboration_candidate(
-                    local_b, (local_a, local_c), "B", ("A", "C"), frame_num)
+                    local_b, (local_a, local_c), "B", ("A", "C"), frame_num,
+                    target_id=target_id)
                 out_b, max_score_b, response_APCE_b = (
                     tracker2.plain_collaboration_finalize_frame(
-                        collaborative_b, info=info_b, debug_name="plain-v1-b"))
+                        local_b, collaborative_b, info=info_b,
+                        debug_name="plain-v1-b"))
                 time_b = local_time_b + (time.time() - start_time_b)
 
                 start_time_c = time.time()
                 collaborative_c = tracker3.plain_collaboration_candidate(
-                    local_c, (local_a, local_b), "C", ("A", "B"), frame_num)
+                    local_c, (local_a, local_b), "C", ("A", "B"), frame_num,
+                    target_id=target_id)
                 out_c, max_score_c, response_APCE_c = (
                     tracker3.plain_collaboration_finalize_frame(
-                        collaborative_c, info=info_c, debug_name="plain-v1-c"))
+                        local_c, collaborative_c, info=info_c,
+                        debug_name="plain-v1-c"))
                 time_c = local_time_c + (time.time() - start_time_c)
 
                 score_a_val = _to_float(max_score_a)

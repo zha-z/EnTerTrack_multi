@@ -1,0 +1,9 @@
+BASE_CONFIG: plain_collaboration_v1
+EXPERIMENT_NAME: B0-ABC-Plain-Collaboration-V1-D0-Closed-Loop
+
+TEST:
+  PLAIN_COLLABORATION:
+    ENABLED: true
+    SAFE_COMMIT: false
+    SAVE_DIAGNOSTICS: true
+    SAVE_COUNTERFACTUAL_DIAGNOSTICS: true

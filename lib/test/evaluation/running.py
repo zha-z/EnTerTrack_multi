@@ -33,6 +33,28 @@ PLAIN_COLLABORATION_DIAGNOSTIC_COLUMNS = (
     "residual_scale",
 )
 
+_PLAIN_COUNTERFACTUAL_PREFIX_COLUMNS = tuple(
+    "{}_{}".format(prefix, suffix)
+    for prefix in ("local", "collaborative", "sender_0", "sender_1")
+    for suffix in (
+        "max_score", "apce", "entropy", "bbox_x", "bbox_y", "bbox_w",
+        "bbox_h", "center_x", "center_y", "width", "height", "area")
+)
+PLAIN_COLLABORATION_COUNTERFACTUAL_COLUMNS = (
+    "frame_id", "target_id", "receiver_view", "sender_view_0",
+    "sender_view_1", "uses_gt", "safe_commit", "valid_remote_count",
+    "search_token_count", "sender_weight_0", "sender_weight_1",
+    "residual_norm", "relative_residual_norm", "residual_scale",
+    "local_center_displacement", "local_scale_change",
+    "local_collab_center_displacement", "local_collab_scale_difference",
+    "persistent_state_digest_before", "persistent_state_digest_after",
+) + _PLAIN_COUNTERFACTUAL_PREFIX_COLUMNS + (
+    "state_output_bbox_x", "state_output_bbox_y", "state_output_bbox_w",
+    "state_output_bbox_h", "reported_output_bbox_x",
+    "reported_output_bbox_y", "reported_output_bbox_w",
+    "reported_output_bbox_h", "next_crop_state_digest",
+)
+
 
 def _save_tracker_output(seq: Sequence, tracker: Tracker, output: dict):
     """Saves the output of the tracker."""
@@ -92,6 +114,16 @@ def _save_tracker_output(seq: Sequence, tracker: Tracker, output: dict):
             writer = csv.DictWriter(
                 fh,
                 fieldnames=PLAIN_COLLABORATION_DIAGNOSTIC_COLUMNS,
+                extrasaction='raise',
+            )
+            writer.writeheader()
+            writer.writerows(data)
+
+    def save_plain_collaboration_counterfactual(file, data):
+        with open(file, 'w', newline='') as fh:
+            writer = csv.DictWriter(
+                fh,
+                fieldnames=PLAIN_COLLABORATION_COUNTERFACTUAL_COLUMNS,
                 extrasaction='raise',
             )
             writer.writeheader()
@@ -236,6 +268,11 @@ def _save_tracker_output(seq: Sequence, tracker: Tracker, output: dict):
             diagnostics_file = '{}_plain_collaboration.csv'.format(
                 base_results_path)
             save_plain_collaboration_diagnostics(diagnostics_file, data)
+
+        if key == 'plain_collaboration_counterfactual':
+            diagnostics_file = '{}_plain_collaboration_counterfactual.csv'.format(
+                base_results_path)
+            save_plain_collaboration_counterfactual(diagnostics_file, data)
 
         elif key == 'time':
             if isinstance(data[0], dict):
@@ -656,6 +693,20 @@ def run_three_multi_sequence(seq_a: Sequence, seq_b: Sequence ,seq_c: Sequence, 
                 tracker._save_plain_collaboration_diagnostics = False
         return tracker._save_plain_collaboration_diagnostics
 
+    def _plain_collaboration_counterfactual_enabled():
+        if not hasattr(tracker, "_save_plain_collaboration_counterfactual"):
+            try:
+                params = tracker.get_parameters()
+                plain_cfg = getattr(
+                    params.cfg.TEST, "PLAIN_COLLABORATION", None)
+                tracker._save_plain_collaboration_counterfactual = bool(
+                    _plain_collaboration_enabled()
+                    and getattr(
+                        plain_cfg, "SAVE_COUNTERFACTUAL_DIAGNOSTICS", False))
+            except Exception:
+                tracker._save_plain_collaboration_counterfactual = False
+        return tracker._save_plain_collaboration_counterfactual
+
     def _sequence_results_exist(
         seq,
         need_decision_log=False,
@@ -663,6 +714,7 @@ def run_three_multi_sequence(seq_a: Sequence, seq_b: Sequence ,seq_c: Sequence, 
         need_motion_diagnostics=False,
         need_c3r_instrumentation=False,
         need_plain_collaboration_diagnostics=False,
+        need_plain_collaboration_counterfactual=False,
         uav_id="unknown",
     ):
         if seq.object_ids is None:
@@ -699,6 +751,10 @@ def run_three_multi_sequence(seq_a: Sequence, seq_b: Sequence ,seq_c: Sequence, 
                         return False
             if need_plain_collaboration_diagnostics and not os.path.isfile(
                     '{}/{}_plain_collaboration.csv'.format(
+                        tracker.results_dir, seq.name)):
+                return False
+            if need_plain_collaboration_counterfactual and not os.path.isfile(
+                    '{}/{}_plain_collaboration_counterfactual.csv'.format(
                         tracker.results_dir, seq.name)):
                 return False
             return True
@@ -742,6 +798,10 @@ def run_three_multi_sequence(seq_a: Sequence, seq_b: Sequence ,seq_c: Sequence, 
                 '{}/{}_plain_collaboration.csv'.format(
                     tracker.results_dir, seq.name)):
             return False
+        if need_plain_collaboration_counterfactual and not os.path.isfile(
+                '{}/{}_plain_collaboration_counterfactual.csv'.format(
+                    tracker.results_dir, seq.name)):
+            return False
         return True
 
     def _results_exist_a():
@@ -751,9 +811,11 @@ def run_three_multi_sequence(seq_a: Sequence, seq_b: Sequence ,seq_c: Sequence, 
         need_c3r_instrumentation = _c3r_instrumentation_enabled()
         need_plain_diagnostics = (
             _plain_collaboration_diagnostics_enabled())
+        need_plain_counterfactual = (
+            _plain_collaboration_counterfactual_enabled())
         if (need_decision_log or need_frame_diagnostics
                 or need_motion_diagnostics or need_c3r_instrumentation
-                or need_plain_diagnostics):
+                or need_plain_diagnostics or need_plain_counterfactual):
             return all(
                 _sequence_results_exist(
                     seq,
@@ -763,6 +825,8 @@ def run_three_multi_sequence(seq_a: Sequence, seq_b: Sequence ,seq_c: Sequence, 
                     need_c3r_instrumentation=need_c3r_instrumentation,
                     need_plain_collaboration_diagnostics=(
                         need_plain_diagnostics),
+                    need_plain_collaboration_counterfactual=(
+                        need_plain_counterfactual),
                     uav_id=uav_id,
                 )
                 for seq, uav_id in ((seq_a, "A"), (seq_b, "B"), (seq_c, "C"))

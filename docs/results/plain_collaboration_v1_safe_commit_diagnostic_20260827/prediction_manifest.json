@@ -1,0 +1,86 @@
+{
+  "phase": "prediction_freeze_before_gt_join",
+  "prediction_file": "/data/zjy/EnTeR-Track-main/docs/results/plain_collaboration_v1_safe_commit_diagnostic_20260827/prediction_only_features.csv",
+  "prediction_rows": 14112,
+  "prediction_sha256": "23f3ed852fe96a7cd3c05ab494f367a5d89512a84d4dbbab7d84d94e7ca9b7f9",
+  "results_dir": "/data/zjy/EnTeR-Track-main/output/test/tracking_results/entertrack/plain_collaboration_v1_d0_safe_28212",
+  "schema_version": 1,
+  "source_files": [
+    {
+      "path": "/data/zjy/EnTeR-Track-main/output/test/tracking_results/entertrack/plain_collaboration_v1_d0_safe_28212/md3016-1_plain_collaboration_counterfactual.csv",
+      "rows": 970,
+      "sha256": "0fa8530c271ae033db9f32db40a0444941cb24b687791dbc2738ad5fe113e6a2"
+    },
+    {
+      "path": "/data/zjy/EnTeR-Track-main/output/test/tracking_results/entertrack/plain_collaboration_v1_d0_safe_28212/md3016-2_plain_collaboration_counterfactual.csv",
+      "rows": 970,
+      "sha256": "912caa3bac89e1f73ea848d905023994daaff5f5ac5ad4c1526b431bb569a39a"
+    },
+    {
+      "path": "/data/zjy/EnTeR-Track-main/output/test/tracking_results/entertrack/plain_collaboration_v1_d0_safe_28212/md3016-3_plain_collaboration_counterfactual.csv",
+      "rows": 970,
+      "sha256": "93e13ed180d89e57233b0f71065321522e36f7024765dc4aad6c1310d384ea06"
+    },
+    {
+      "path": "/data/zjy/EnTeR-Track-main/output/test/tracking_results/entertrack/plain_collaboration_v1_d0_safe_28212/md3027-1_plain_collaboration_counterfactual.csv",
+      "rows": 1136,
+      "sha256": "0e2f64d979a89c1bb8cc12f8586fd6bf571e89976f6f6f5883cd1691042a41e2"
+    },
+    {
+      "path": "/data/zjy/EnTeR-Track-main/output/test/tracking_results/entertrack/plain_collaboration_v1_d0_safe_28212/md3027-2_plain_collaboration_counterfactual.csv",
+      "rows": 1136,
+      "sha256": "42536b0eb50a7e5d105b7b76ee4b3611cd65fad217511c1729f8959bf6e5685e"
+    },
+    {
+      "path": "/data/zjy/EnTeR-Track-main/output/test/tracking_results/entertrack/plain_collaboration_v1_d0_safe_28212/md3027-3_plain_collaboration_counterfactual.csv",
+      "rows": 1136,
+      "sha256": "f0347de79b255c2393c3069ebd16e1b14011cc0a2ad15991e654de6cf8df116a"
+    },
+    {
+      "path": "/data/zjy/EnTeR-Track-main/output/test/tracking_results/entertrack/plain_collaboration_v1_d0_safe_28212/md3034-1_plain_collaboration_counterfactual.csv",
+      "rows": 909,
+      "sha256": "c484fe30b2882f3ffed718b73dd2781d3858dc75d50663764fa761202e47ef11"
+    },
+    {
+      "path": "/data/zjy/EnTeR-Track-main/output/test/tracking_results/entertrack/plain_collaboration_v1_d0_safe_28212/md3034-2_plain_collaboration_counterfactual.csv",
+      "rows": 909,
+      "sha256": "c915a3b30d48a3d9283f440f4b3ccd686dddba2f9c22c1799c1428dcec126f96"
+    },
+    {
+      "path": "/data/zjy/EnTeR-Track-main/output/test/tracking_results/entertrack/plain_collaboration_v1_d0_safe_28212/md3034-3_plain_collaboration_counterfactual.csv",
+      "rows": 909,
+      "sha256": "8a4f13f1632f54747e245771a071b02e82faa40a934eef916b5f223f8ed14ee3"
+    },
+    {
+      "path": "/data/zjy/EnTeR-Track-main/output/test/tracking_results/entertrack/plain_collaboration_v1_d0_safe_28212/md3048-1_plain_collaboration_counterfactual.csv",
+      "rows": 530,
+      "sha256": "dfe7fc59506dea9796b7f55000c20fd3b80e4d750d7901af51491007669fee1d"
+    },
+    {
+      "path": "/data/zjy/EnTeR-Track-main/output/test/tracking_results/entertrack/plain_collaboration_v1_d0_safe_28212/md3048-2_plain_collaboration_counterfactual.csv",
+      "rows": 530,
+      "sha256": "9c86380eae6c3f4b7197f7ffc54baa5d742049525dc9c774dfb172aeabc2962d"
+    },
+    {
+      "path": "/data/zjy/EnTeR-Track-main/output/test/tracking_results/entertrack/plain_collaboration_v1_d0_safe_28212/md3048-3_plain_collaboration_counterfactual.csv",
+      "rows": 530,
+      "sha256": "4a1b58d5614623132bd0322eb8b1bf9f755ac8ef0b93230b1e402592f9202b8c"
+    },
+    {
+      "path": "/data/zjy/EnTeR-Track-main/output/test/tracking_results/entertrack/plain_collaboration_v1_d0_safe_28212/md3055-1_plain_collaboration_counterfactual.csv",
+      "rows": 1159,
+      "sha256": "ce975a5077e557b3aeb4a56d514b51dc6971c141a25df31bdfee2396b6c22634"
+    },
+    {
+      "path": "/data/zjy/EnTeR-Track-main/output/test/tracking_results/entertrack/plain_collaboration_v1_d0_safe_28212/md3055-2_plain_collaboration_counterfactual.csv",
+      "rows": 1159,
+      "sha256": "eb707c8793639c679a8534b120f640e4e58c35f7cc20dae975d2cbb4e9913654"
+    },
+    {
+      "path": "/data/zjy/EnTeR-Track-main/output/test/tracking_results/entertrack/plain_collaboration_v1_d0_safe_28212/md3055-3_plain_collaboration_counterfactual.csv",
+      "rows": 1159,
+      "sha256": "3d3a058e21fa2ece2d8983d1e6e456e177acd6e06f63c9743195ed8e3aaca6f7"
+    }
+  ],
+  "uses_gt": false
+}

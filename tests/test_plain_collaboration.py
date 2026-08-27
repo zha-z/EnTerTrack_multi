@@ -249,6 +249,30 @@ class PlainCollaborationIntegrationTests(unittest.TestCase):
         self.assertFalse(local_cfg.MODEL.FCVC.ENABLED)
         self.assertEqual(local_cfg.MODEL.BACKBONE.CE_LOC, [])
 
+    def test_d0_diagnostic_configs_only_change_commit_or_local_path(self):
+        expected = {
+            "plain_collaboration_v1_d0_local": (False, False, False, False),
+            "plain_collaboration_v1_d0_closed_loop": (True, True, False, True),
+            "plain_collaboration_v1_d0_safe": (True, True, True, True),
+        }
+        for name, values in expected.items():
+            local_cfg = copy.deepcopy(cfg)
+            update_config_from_file(
+                "experiments/entertrack/{}.yaml".format(name),
+                base_cfg=local_cfg,
+            )
+            plain = local_cfg.TEST.PLAIN_COLLABORATION
+            self.assertEqual((
+                bool(local_cfg.MODEL.PLAIN_COLLABORATION.ENABLED),
+                bool(plain.ENABLED),
+                bool(plain.SAFE_COMMIT),
+                bool(plain.SAVE_COUNTERFACTUAL_DIAGNOSTICS),
+            ), values)
+            self.assertFalse(local_cfg.MODEL.PCUM.ENABLED)
+            self.assertFalse(local_cfg.MODEL.C3R.ENABLED)
+            self.assertFalse(local_cfg.MODEL.FCVC.ENABLED)
+            self.assertEqual(local_cfg.MODEL.BACKBONE.CE_LOC, [])
+
 
 class PlainCollaborationInferenceTests(unittest.TestCase):
     @staticmethod
@@ -261,6 +285,10 @@ class PlainCollaborationInferenceTests(unittest.TestCase):
             "crop_bbox": [10.0, 10.0, 20.0, 20.0],
             "output": {"target_bbox": [10.0, 10.0, 20.0, 20.0]},
             "target_bbox": [10.0, 10.0, 20.0, 20.0],
+            "prev_bbox": [9.0, 10.0, 20.0, 20.0],
+            "max_score": torch.tensor(0.7),
+            "apce": torch.tensor(30.0),
+            "response": torch.ones(1, 1, 16, 16),
         }
 
     def _runtime_tracker(self):
@@ -274,11 +302,13 @@ class PlainCollaborationInferenceTests(unittest.TestCase):
                 token_dim=12, num_heads=3, enabled=True),
             plain_collaboration_freeze_local=True,
         )
-        runtime.params = SimpleNamespace(search_size=256)
+        runtime.params = SimpleNamespace(search_size=256, search_factor=4.0)
         runtime.save_all_boxes = False
         runtime.debug = False
         runtime.frame_id = 0
         runtime.state = [10.0, 10.0, 20.0, 20.0]
+        runtime.plain_collaboration_safe_commit = False
+        runtime.plain_collaboration_counterfactual_diagnostics = False
         runtime._decode_prediction = lambda output, resize_factor, return_score: (
             [0.0, 0.0, 20.0, 20.0],
             torch.tensor([[0.5, 0.5, 0.25, 0.25]]),
@@ -315,6 +345,33 @@ class PlainCollaborationInferenceTests(unittest.TestCase):
         self.assertEqual(output["plain_collaboration_diagnostics"]["frame_id"], 7)
         self.assertTrue(torch.isfinite(score).all())
         self.assertTrue(torch.isfinite(apce).all())
+
+    def test_safe_commit_reports_collaboration_but_keeps_local_state(self):
+        runtime = self._runtime_tracker()
+        runtime.plain_collaboration_safe_commit = True
+        runtime.plain_collaboration_counterfactual_diagnostics = True
+        local = self._candidate(1.0)
+        collaborative = runtime.plain_collaboration_candidate(
+            local,
+            (self._candidate(2.0), self._candidate(3.0)),
+            receiver_view="A",
+            sender_views=("B", "C"),
+            frame_id=7,
+            target_id="T0",
+        )
+        row = collaborative["plain_collaboration_counterfactual"]
+        self.assertEqual(
+            row["persistent_state_digest_before"],
+            row["persistent_state_digest_after"],
+        )
+        output, _, _ = runtime.plain_collaboration_finalize_frame(
+            local, collaborative)
+        self.assertEqual(runtime.state, local["target_bbox"])
+        self.assertEqual(output["target_bbox"], collaborative["target_bbox"])
+        saved = output["plain_collaboration_counterfactual"]
+        self.assertEqual(saved["state_output_bbox_x"], 10.0)
+        self.assertEqual(saved["reported_output_bbox_x"], 12.0)
+        self.assertFalse(saved["uses_gt"])
 
     def test_runtime_rejects_noncanonical_sender_order(self):
         runtime = self._runtime_tracker()
@@ -374,6 +431,7 @@ class PlainCollaborationInferenceTests(unittest.TestCase):
                     no_gt_inference=True,
                 )
                 self.plain_collaboration_enabled = True
+                self.plain_collaboration_safe_commit = False
                 self.fcvc_enabled = False
                 self.c3r_enabled = False
                 self.local_calls = 0
@@ -387,7 +445,8 @@ class PlainCollaborationInferenceTests(unittest.TestCase):
                 return {"view": self.view}
 
             def plain_collaboration_candidate(
-                    self, local, remotes, receiver_view, sender_views, frame_id):
+                    self, local, remotes, receiver_view, sender_views, frame_id,
+                    target_id=""):
                 self.assert_equal(receiver_view, self.view)
                 self.assert_equal(
                     tuple(item["view"] for item in remotes), tuple(sender_views))
@@ -400,7 +459,7 @@ class PlainCollaborationInferenceTests(unittest.TestCase):
                     raise AssertionError("{} != {}".format(actual, expected))
 
             def plain_collaboration_finalize_frame(
-                    self, candidate, info=None, debug_name=""):
+                    self, local, candidate, info=None, debug_name=""):
                 diagnostic = {
                     "frame_id": candidate["frame_id"],
                     "receiver_view": self.view,

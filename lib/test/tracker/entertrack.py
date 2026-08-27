@@ -529,6 +529,19 @@ class EnTeRTrack(BaseTracker):
                 "Plain Collaboration MODEL/TEST enable flags must match")
         self.plain_collaboration_enabled = bool(
             plain_model_enabled and plain_test_enabled)
+        plain_test_cfg = getattr(
+            self.cfg.TEST, "PLAIN_COLLABORATION", None)
+        self.plain_collaboration_safe_commit = bool(getattr(
+            plain_test_cfg, "SAFE_COMMIT", False))
+        self.plain_collaboration_counterfactual_diagnostics = bool(getattr(
+            plain_test_cfg, "SAVE_COUNTERFACTUAL_DIAGNOSTICS", False))
+        if self.plain_collaboration_safe_commit and not self.plain_collaboration_enabled:
+            raise RuntimeError(
+                "Plain Collaboration SAFE_COMMIT requires collaboration inference")
+        if (self.plain_collaboration_counterfactual_diagnostics
+                and not self.plain_collaboration_enabled):
+            raise RuntimeError(
+                "Plain Collaboration counterfactual diagnostics require inference")
         if self.plain_collaboration_enabled:
             if self.network.plain_collaboration is None:
                 raise RuntimeError(
@@ -1960,7 +1973,7 @@ class EnTeRTrack(BaseTracker):
 
     def plain_collaboration_candidate(
             self, local_candidate, remote_candidates, receiver_view,
-            sender_views, frame_id):
+            sender_views, frame_id, target_id=""):
         """Fuse two synchronized remote final-search features and rerun head."""
         if not self.plain_collaboration_enabled:
             raise RuntimeError(
@@ -2001,6 +2014,9 @@ class EnTeRTrack(BaseTracker):
             raise RuntimeError(
                 "Plain Collaboration requires two finite remote senders")
 
+        state_digest_before = None
+        if getattr(self, "plain_collaboration_counterfactual_diagnostics", False):
+            state_digest_before = self.fcvc_persistent_state_digest()
         with torch.no_grad():
             head_output = self.network(
                 template=None,
@@ -2010,6 +2026,11 @@ class EnTeRTrack(BaseTracker):
                 plain_remote_tokens=remote_tokens,
                 plain_remote_valid=remote_valid,
             )
+        if getattr(self, "plain_collaboration_counterfactual_diagnostics", False):
+            state_digest_after = self.fcvc_persistent_state_digest()
+            if state_digest_after != state_digest_before:
+                raise RuntimeError(
+                    "Plain Collaboration forward mutated persistent runtime state")
         collaboration = head_output.get("plain_collaboration", None)
         if not isinstance(collaboration, dict):
             raise RuntimeError(
@@ -2072,6 +2093,88 @@ class EnTeRTrack(BaseTracker):
             "residual_scale": self._plain_scalar(
                 collaboration["residual_scale"]),
         }
+        def candidate_metrics(source):
+            bbox = [float(value) for value in source["target_bbox"]]
+            center_x = bbox[0] + 0.5 * bbox[2]
+            center_y = bbox[1] + 0.5 * bbox[3]
+            return {
+                "bbox": bbox,
+                "center_x": center_x,
+                "center_y": center_y,
+                "width": bbox[2],
+                "height": bbox[3],
+                "area": bbox[2] * bbox[3],
+                "max_score": self._score_value(source["max_score"]),
+                "apce": self._score_value(source["apce"]),
+                "entropy": normalized_response_entropy(source.get("response")),
+            }
+
+        counterfactual = None
+        if getattr(self, "plain_collaboration_counterfactual_diagnostics", False):
+            local_metrics = candidate_metrics(local_candidate)
+            collaborative_metrics = {
+                "bbox": [float(value) for value in target_bbox],
+                "center_x": float(target_bbox[0] + 0.5 * target_bbox[2]),
+                "center_y": float(target_bbox[1] + 0.5 * target_bbox[3]),
+                "width": float(target_bbox[2]),
+                "height": float(target_bbox[3]),
+                "area": float(target_bbox[2] * target_bbox[3]),
+                "max_score": self._score_value(max_score),
+                "apce": self._score_value(self.calAPCE(response)),
+                "entropy": normalized_response_entropy(response),
+            }
+            sender_metrics = [candidate_metrics(item) for item in remote_candidates]
+            previous_bbox = local_candidate.get("prev_bbox")
+            if previous_bbox is None:
+                previous_center = (local_metrics["center_x"], local_metrics["center_y"])
+                previous_area = local_metrics["area"]
+            else:
+                previous_center = (
+                    float(previous_bbox[0] + 0.5 * previous_bbox[2]),
+                    float(previous_bbox[1] + 0.5 * previous_bbox[3]),
+                )
+                previous_area = float(previous_bbox[2] * previous_bbox[3])
+            eps = 1e-12
+            counterfactual = {
+                "frame_id": int(frame_id),
+                "target_id": str(target_id),
+                "receiver_view": receiver_view,
+                "sender_view_0": sender_views[0],
+                "sender_view_1": sender_views[1],
+                "uses_gt": False,
+                "safe_commit": bool(getattr(
+                    self, "plain_collaboration_safe_commit", False)),
+                "valid_remote_count": 2,
+                "search_token_count": int(local_search.shape[1]),
+                "sender_weight_0": diagnostics["sender_weight_0"],
+                "sender_weight_1": diagnostics["sender_weight_1"],
+                "residual_norm": diagnostics["residual_norm"],
+                "relative_residual_norm": diagnostics["relative_residual_norm"],
+                "residual_scale": diagnostics["residual_scale"],
+                "local_center_displacement": math.hypot(
+                    local_metrics["center_x"] - previous_center[0],
+                    local_metrics["center_y"] - previous_center[1]),
+                "local_scale_change": math.log(
+                    max(local_metrics["area"], eps) / max(previous_area, eps)),
+                "local_collab_center_displacement": math.hypot(
+                    collaborative_metrics["center_x"] - local_metrics["center_x"],
+                    collaborative_metrics["center_y"] - local_metrics["center_y"]),
+                "local_collab_scale_difference": math.log(
+                    max(collaborative_metrics["area"], eps)
+                    / max(local_metrics["area"], eps)),
+                "persistent_state_digest_before": state_digest_before,
+                "persistent_state_digest_after": state_digest_after,
+            }
+            for prefix, values in (
+                    ("local", local_metrics),
+                    ("collaborative", collaborative_metrics),
+                    ("sender_0", sender_metrics[0]),
+                    ("sender_1", sender_metrics[1])):
+                for key in ("max_score", "apce", "entropy", "center_x",
+                            "center_y", "width", "height", "area"):
+                    counterfactual["{}_{}".format(prefix, key)] = values[key]
+                for index, key in enumerate(("x", "y", "w", "h")):
+                    counterfactual["{}_bbox_{}".format(prefix, key)] = values["bbox"][index]
         candidate = dict(local_candidate)
         candidate.update({
             "output": output,
@@ -2083,20 +2186,50 @@ class EnTeRTrack(BaseTracker):
             "pred_boxes": pred_boxes,
             "used_remote": True,
             "plain_collaboration_diagnostics": diagnostics,
+            "_plain_local_candidate": local_candidate,
         })
+        if counterfactual is not None:
+            candidate["plain_collaboration_counterfactual"] = counterfactual
         return candidate
 
     def plain_collaboration_finalize_frame(
-            self, collaborative_candidate, info=None, debug_name=""):
-        """Commit the collaborative bbox as this receiver's next-frame state."""
+            self, local_candidate, collaborative_candidate=None,
+            info=None, debug_name=""):
+        """Commit local or collaborative state and always report collaboration."""
         if not self.plain_collaboration_enabled:
             raise RuntimeError(
                 "Plain Collaboration finalize requested while disabled")
+        if collaborative_candidate is None:
+            collaborative_candidate = local_candidate
+            local_candidate = collaborative_candidate.get(
+                "_plain_local_candidate", collaborative_candidate)
         self.frame_id += 1
-        output = self._commit_candidate(
-            collaborative_candidate, info=info, debug_name=debug_name)
+        if getattr(self, "plain_collaboration_safe_commit", False):
+            self._commit_state_from_candidate(
+                local_candidate, info=info, debug_name=debug_name)
+            output = copy.deepcopy(collaborative_candidate["output"])
+        else:
+            output = self._commit_candidate(
+                collaborative_candidate, info=info, debug_name=debug_name)
         output["plain_collaboration_diagnostics"] = dict(
             collaborative_candidate["plain_collaboration_diagnostics"])
+        if "plain_collaboration_counterfactual" in collaborative_candidate:
+            row = dict(collaborative_candidate[
+                "plain_collaboration_counterfactual"])
+            row["state_output_bbox_x"] = float(self.state[0])
+            row["state_output_bbox_y"] = float(self.state[1])
+            row["state_output_bbox_w"] = float(self.state[2])
+            row["state_output_bbox_h"] = float(self.state[3])
+            row["reported_output_bbox_x"] = float(
+                collaborative_candidate["target_bbox"][0])
+            row["reported_output_bbox_y"] = float(
+                collaborative_candidate["target_bbox"][1])
+            row["reported_output_bbox_w"] = float(
+                collaborative_candidate["target_bbox"][2])
+            row["reported_output_bbox_h"] = float(
+                collaborative_candidate["target_bbox"][3])
+            row["next_crop_state_digest"] = self.fcvc_next_crop_digest()
+            output["plain_collaboration_counterfactual"] = row
         return (
             output,
             collaborative_candidate["max_score"],

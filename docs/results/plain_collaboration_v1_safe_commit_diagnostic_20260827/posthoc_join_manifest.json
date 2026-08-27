@@ -1,0 +1,14 @@
+{
+  "dataset": "threemdot_val",
+  "harmful_threshold": -0.02,
+  "helpful_threshold": 0.02,
+  "label_counts": {
+    "harmful": 937,
+    "helpful": 770,
+    "invalid": 599,
+    "tie": 11806
+  },
+  "phase": "posthoc_gt_join",
+  "prediction_rows": 14112,
+  "prediction_sha256_verified": "23f3ed852fe96a7cd3c05ab494f367a5d89512a84d4dbbab7d84d94e7ca9b7f9"
+}
