@@ -1,8 +1,10 @@
 import copy
+import csv
 import os
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 
 import torch
 from torch import nn
@@ -29,6 +31,11 @@ from lib.train.plain_collaboration_freeze import (  # noqa: E402
     apply_plain_collaboration_freeze,
     assert_plain_collaboration_optimizer_membership,
 )
+from lib.test.tracker.entertrack import (  # noqa: E402
+    EnTeRTrack as RuntimeEnTeRTrack,
+)
+from lib.test.evaluation.tracker import Tracker as EvaluationTracker  # noqa: E402
+from lib.test.evaluation.running import _save_tracker_output  # noqa: E402
 
 
 class FakeCenterHead(nn.Module):
@@ -80,6 +87,7 @@ class PlainCollaborationModuleTests(unittest.TestCase):
     def test_default_config_is_disabled(self):
         self.assertFalse(cfg.MODEL.PLAIN_COLLABORATION.ENABLED)
         self.assertFalse(cfg.TRAIN.PLAIN_COLLABORATION.ENABLED)
+        self.assertFalse(cfg.TEST.PLAIN_COLLABORATION.ENABLED)
 
     def test_disabled_returns_exact_input_object(self):
         module = self._module(enabled=False)
@@ -232,12 +240,248 @@ class PlainCollaborationIntegrationTests(unittest.TestCase):
         self.assertTrue(local_cfg.MODEL.PLAIN_COLLABORATION.ENABLED)
         self.assertTrue(local_cfg.TRAIN.PLAIN_COLLABORATION.ENABLED)
         self.assertTrue(local_cfg.TRAIN.PLAIN_COLLABORATION.FREEZE_LOCAL)
+        self.assertTrue(local_cfg.TEST.PLAIN_COLLABORATION.ENABLED)
+        self.assertTrue(local_cfg.TEST.PLAIN_COLLABORATION.SAVE_DIAGNOSTICS)
         self.assertTrue(local_cfg.TRAIN.MULTIVIEW.REQUIRE_ALL_VIEWS_VISIBLE)
         self.assertTrue(local_cfg.TRAIN.MULTIVIEW.CANONICAL_VIEW_ORDER)
         self.assertFalse(local_cfg.MODEL.PCUM.ENABLED)
         self.assertFalse(local_cfg.MODEL.C3R.ENABLED)
         self.assertFalse(local_cfg.MODEL.FCVC.ENABLED)
         self.assertEqual(local_cfg.MODEL.BACKBONE.CE_LOC, [])
+
+
+class PlainCollaborationInferenceTests(unittest.TestCase):
+    @staticmethod
+    def _candidate(feature_value):
+        feature = torch.full((1, 320, 12), float(feature_value))
+        return {
+            "out_dict": {"backbone_feat": feature},
+            "resize_factor": 1.0,
+            "image": torch.zeros(96, 128, 3),
+            "crop_bbox": [10.0, 10.0, 20.0, 20.0],
+            "output": {"target_bbox": [10.0, 10.0, 20.0, 20.0]},
+            "target_bbox": [10.0, 10.0, 20.0, 20.0],
+        }
+
+    def _runtime_tracker(self):
+        runtime = RuntimeEnTeRTrack.__new__(RuntimeEnTeRTrack)
+        runtime.plain_collaboration_enabled = True
+        runtime.network = EnTeRTrack(
+            transformer=DummyBackbone(),
+            box_head=FakeCenterHead(),
+            head_type="CENTER",
+            plain_collaboration=PlainCollaborationV1(
+                token_dim=12, num_heads=3, enabled=True),
+            plain_collaboration_freeze_local=True,
+        )
+        runtime.params = SimpleNamespace(search_size=256)
+        runtime.save_all_boxes = False
+        runtime.debug = False
+        runtime.frame_id = 0
+        runtime.state = [10.0, 10.0, 20.0, 20.0]
+        runtime._decode_prediction = lambda output, resize_factor, return_score: (
+            [0.0, 0.0, 20.0, 20.0],
+            torch.tensor([[0.5, 0.5, 0.25, 0.25]]),
+            torch.tensor([0.8]),
+            torch.ones(1, 1, 16, 16),
+        )
+        runtime.map_box_back = lambda box, resize_factor, reference_bbox=None: (
+            [12.0, 13.0, 20.0, 20.0])
+        runtime.calAPCE = lambda response: torch.tensor(42.0)
+        return runtime
+
+    def test_runtime_fuses_two_canonical_senders_and_commits(self):
+        runtime = self._runtime_tracker()
+        local = self._candidate(1.0)
+        remote_b = self._candidate(2.0)
+        remote_c = self._candidate(3.0)
+        candidate = runtime.plain_collaboration_candidate(
+            local,
+            (remote_b, remote_c),
+            receiver_view="A",
+            sender_views=("B", "C"),
+            frame_id=7,
+        )
+        diagnostics = candidate["plain_collaboration_diagnostics"]
+        self.assertTrue(candidate["used_remote"])
+        self.assertEqual(diagnostics["valid_remote_count"], 2)
+        self.assertEqual(diagnostics["search_token_count"], 256)
+        self.assertAlmostEqual(diagnostics["sender_weight_0"], 0.5)
+        self.assertAlmostEqual(diagnostics["sender_weight_1"], 0.5)
+        output, score, apce = runtime.plain_collaboration_finalize_frame(
+            candidate)
+        self.assertEqual(runtime.frame_id, 1)
+        self.assertEqual(runtime.state, candidate["target_bbox"])
+        self.assertEqual(output["plain_collaboration_diagnostics"]["frame_id"], 7)
+        self.assertTrue(torch.isfinite(score).all())
+        self.assertTrue(torch.isfinite(apce).all())
+
+    def test_runtime_rejects_noncanonical_sender_order(self):
+        runtime = self._runtime_tracker()
+        with self.assertRaisesRegex(ValueError, "canonical two-sender order"):
+            runtime.plain_collaboration_candidate(
+                self._candidate(1.0),
+                (self._candidate(2.0), self._candidate(3.0)),
+                receiver_view="A",
+                sender_views=("C", "B"),
+                frame_id=1,
+            )
+
+    def test_runtime_rejects_checkpoint_without_adapter(self):
+        runtime = RuntimeEnTeRTrack.__new__(RuntimeEnTeRTrack)
+        network = DummyTrainModel()
+        local_only_state = {
+            name: value for name, value in network.state_dict().items()
+            if not name.startswith("plain_collaboration.")
+        }
+        with tempfile.NamedTemporaryFile(suffix=".pth.tar") as checkpoint_file:
+            torch.save({"net": local_only_state}, checkpoint_file.name)
+            with self.assertRaises(RuntimeError):
+                runtime._load_network(network, checkpoint_file.name)
+
+    def test_runtime_rejects_single_view_api(self):
+        runtime = RuntimeEnTeRTrack.__new__(RuntimeEnTeRTrack)
+        runtime.plain_collaboration_enabled = True
+        with self.assertRaisesRegex(RuntimeError, "three-view runner"):
+            runtime.track(torch.zeros(8, 8, 3), {})
+        with self.assertRaisesRegex(RuntimeError, "independent Fusetrack"):
+            runtime.Fusetrack(torch.zeros(8, 8, 3), {})
+
+    def test_three_view_runner_dispatches_plain_collaboration(self):
+        local_cfg = copy.deepcopy(cfg)
+        local_cfg.MODEL.PLAIN_COLLABORATION.ENABLED = True
+        local_cfg.TEST.PLAIN_COLLABORATION.ENABLED = True
+        local_cfg.TEST.PLAIN_COLLABORATION.SAVE_DIAGNOSTICS = True
+
+        class SequenceStub:
+            def __init__(self, name):
+                self.name = name
+                self.frames = ["frame0", "frame1"]
+                self.ground_truth_rect = [
+                    [10.0, 10.0, 20.0, 20.0],
+                    [11.0, 10.0, 20.0, 20.0],
+                ]
+
+            def frame_info(self, frame_num):
+                return {}
+
+        class TrackerStub:
+            def __init__(self, view):
+                self.view = view
+                self.cfg = local_cfg
+                self.params = SimpleNamespace(
+                    save_all_boxes=False,
+                    no_gt_inference=True,
+                )
+                self.plain_collaboration_enabled = True
+                self.fcvc_enabled = False
+                self.c3r_enabled = False
+                self.local_calls = 0
+                self.sender_orders = []
+
+            def initialize(self, image, info):
+                return None
+
+            def plain_collaboration_local_candidate(self, image):
+                self.local_calls += 1
+                return {"view": self.view}
+
+            def plain_collaboration_candidate(
+                    self, local, remotes, receiver_view, sender_views, frame_id):
+                self.assert_equal(receiver_view, self.view)
+                self.assert_equal(
+                    tuple(item["view"] for item in remotes), tuple(sender_views))
+                self.sender_orders.append(tuple(sender_views))
+                return {"frame_id": frame_id, "receiver_view": receiver_view}
+
+            @staticmethod
+            def assert_equal(actual, expected):
+                if actual != expected:
+                    raise AssertionError("{} != {}".format(actual, expected))
+
+            def plain_collaboration_finalize_frame(
+                    self, candidate, info=None, debug_name=""):
+                diagnostic = {
+                    "frame_id": candidate["frame_id"],
+                    "receiver_view": self.view,
+                    "sender_view_0": self.sender_orders[-1][0],
+                    "sender_view_1": self.sender_orders[-1][1],
+                    "used_remote": True,
+                    "valid_remote_count": 2,
+                    "search_token_count": 256,
+                    "sender_weight_0": 0.5,
+                    "sender_weight_1": 0.5,
+                    "residual_norm": 0.1,
+                    "relative_residual_norm": 0.01,
+                    "residual_scale": 0.01,
+                }
+                return ({
+                    "target_bbox": [11.0, 10.0, 20.0, 20.0],
+                    "plain_collaboration_diagnostics": diagnostic,
+                }, torch.tensor(0.8), torch.tensor(20.0))
+
+            def Fusetrack(self, image, info):
+                raise AssertionError("plain runner fell back to Fusetrack")
+
+        wrapper = EvaluationTracker.__new__(EvaluationTracker)
+        wrapper._read_image = lambda path: path
+        trackers = [TrackerStub(view) for view in ("A", "B", "C")]
+        sequences = [SequenceStub("T0-{}".format(index)) for index in (1, 2, 3)]
+        outputs = EvaluationTracker.Fuse_three_multi_track(
+            wrapper,
+            *trackers,
+            *sequences,
+            *({"init_bbox": [10.0, 10.0, 20.0, 20.0]},) * 3
+        )
+        self.assertEqual([tracker.local_calls for tracker in trackers], [1, 1, 1])
+        self.assertEqual(trackers[0].sender_orders, [("B", "C")])
+        self.assertEqual(trackers[1].sender_orders, [("A", "C")])
+        self.assertEqual(trackers[2].sender_orders, [("A", "B")])
+        for output in outputs:
+            self.assertEqual(len(output["target_bbox"]), 2)
+            self.assertTrue(
+                output["plain_collaboration_diagnostics"][1]["used_remote"])
+
+    def test_plain_diagnostics_are_saved_as_csv(self):
+        row = {
+            "frame_id": 1,
+            "receiver_view": "A",
+            "sender_view_0": "B",
+            "sender_view_1": "C",
+            "used_remote": True,
+            "valid_remote_count": 2,
+            "search_token_count": 256,
+            "sender_weight_0": 0.5,
+            "sender_weight_1": 0.5,
+            "residual_norm": 1.0,
+            "relative_residual_norm": 0.01,
+            "residual_scale": 0.02,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            tracker = SimpleNamespace(
+                results_dir=directory,
+                name="entertrack",
+                parameter_name="plain_collaboration_v1",
+                run_id=1,
+            )
+            sequence = SimpleNamespace(
+                dataset="threemdot_val",
+                name="T0-1",
+                object_ids=None,
+            )
+            _save_tracker_output(
+                sequence,
+                tracker,
+                {"plain_collaboration_diagnostics": [row]},
+            )
+            path = os.path.join(
+                directory, "T0-1_plain_collaboration.csv")
+            self.assertTrue(os.path.isfile(path))
+            with open(path, newline="") as handle:
+                saved = list(csv.DictReader(handle))
+            self.assertEqual(len(saved), 1)
+            self.assertEqual(saved[0]["receiver_view"], "A")
+            self.assertEqual(saved[0]["valid_remote_count"], "2")
 
     def test_b0_checkpoint_loads_only_local_core(self):
         local_model = DummyTrainModel()

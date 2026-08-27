@@ -802,10 +802,70 @@ class Tracker:
         output_b = {'target_bbox': [], 'time': [], 'max_score': [], 'APCE': []}
         output_c = {'target_bbox': [], 'time': [], 'max_score': [], 'APCE': []}
         sequences = (seq_a, seq_b, seq_c)
-        target_ids = tuple(seq.name.rsplit('-', 1)[0] for seq in sequences)
+        parsed_names = tuple(seq.name.rsplit('-', 1) for seq in sequences)
+        target_ids = tuple(item[0] for item in parsed_names)
         if len(set(target_ids)) != 1:
-            raise ValueError("C3R three-view runner received mixed targets")
+            raise ValueError("Three-view runner received mixed targets")
+        if tuple(item[1] for item in parsed_names) != ("1", "2", "3"):
+            raise ValueError(
+                "Three-view runner requires canonical A/B/C sequence order")
         target_id = target_ids[0]
+        plain_enabled_by_tracker = tuple(bool(getattr(
+            item, "plain_collaboration_enabled", False)) for item in (
+                tracker, tracker2, tracker3))
+        if any(plain_enabled_by_tracker) and not all(plain_enabled_by_tracker):
+            raise ValueError(
+                "Plain Collaboration enablement must match across all views")
+        plain_remote_enabled = all(plain_enabled_by_tracker)
+        plain_test_cfg = getattr(
+            tracker.cfg.TEST, "PLAIN_COLLABORATION", None)
+        plain_save_diagnostics = bool(
+            plain_remote_enabled
+            and getattr(plain_test_cfg, "SAVE_DIAGNOSTICS", True))
+        if plain_remote_enabled:
+            frame_counts = tuple(len(seq.frames) for seq in sequences)
+            if len(set(frame_counts)) != 1:
+                raise ValueError(
+                    "Plain Collaboration requires equal A/B/C frame counts")
+            for frame_index in range(frame_counts[0]):
+                frame_keys = tuple(os.path.basename(
+                    seq.frames[frame_index]) for seq in sequences)
+                if len(set(frame_keys)) != 1:
+                    raise ValueError(
+                        "Plain Collaboration frame paths are not synchronized "
+                        "at frame {}: {}".format(frame_index, frame_keys))
+            required_methods = (
+                "plain_collaboration_local_candidate",
+                "plain_collaboration_candidate",
+                "plain_collaboration_finalize_frame",
+            )
+            for active_tracker in (tracker, tracker2, tracker3):
+                missing = [name for name in required_methods
+                           if not hasattr(active_tracker, name)]
+                if missing:
+                    raise RuntimeError(
+                        "Plain Collaboration tracker methods are missing: {}"
+                        .format(missing))
+            if any((
+                    bool(getattr(tracker, "fcvc_enabled", False)),
+                    bool(getattr(tracker, "c3r_enabled", False)),
+                    bool(getattr(
+                        getattr(tracker.cfg.MODEL, "PCUM", None),
+                        "ENABLED", False)),
+                    bool(getattr(
+                        getattr(tracker.cfg.TEST, "COOP", None),
+                        "ENABLED", False)))):
+                raise RuntimeError(
+                    "Plain Collaboration inference must be the only active "
+                    "cross-view mechanism")
+            if plain_save_diagnostics:
+                output_a['plain_collaboration_diagnostics'] = []
+                output_b['plain_collaboration_diagnostics'] = []
+                output_c['plain_collaboration_diagnostics'] = []
+            print(
+                "[Plain Collaboration V1 inference] enabled=true "
+                "search_tokens=256 senders_per_receiver=2 uses_gt=false "
+                "target={}".format(target_id))
         c3r_model_enabled = bool(getattr(
             getattr(tracker.cfg.MODEL, "C3R", None), "ENABLED", False))
         c3r_test_enabled = bool(getattr(
@@ -941,7 +1001,8 @@ class Tracker:
                 if key not in (
                     "motion_state_diagnostics", "mcr_diagnostics",
                     "c3r_diagnostics", "c3r_source_instrumentation",
-                    "c3r_aggregate_instrumentation")
+                    "c3r_aggregate_instrumentation",
+                    "plain_collaboration_diagnostics")
             )
 
         def _to_float(x):
@@ -958,6 +1019,26 @@ class Tracker:
 
         def _empty_pcum_selector():
             return [0.0, 0.0] + [float("nan")] * 5 + [0.0, 0.0, 0.0]
+
+        def _empty_plain_collaboration_diagnostic(receiver_view):
+            sender_views = [
+                view for view in ("A", "B", "C")
+                if view != receiver_view
+            ]
+            return {
+                "frame_id": 0,
+                "receiver_view": receiver_view,
+                "sender_view_0": sender_views[0],
+                "sender_view_1": sender_views[1],
+                "used_remote": False,
+                "valid_remote_count": 0,
+                "search_token_count": 256,
+                "sender_weight_0": 0.0,
+                "sender_weight_1": 0.0,
+                "residual_norm": 0.0,
+                "relative_residual_norm": 0.0,
+                "residual_scale": 0.0,
+            }
 
         def _payload(out, score, apce):
             return {
@@ -1397,20 +1478,29 @@ class Tracker:
             'target_bbox': init_info_a.get('init_bbox'),
             'time': time_a,
             'max_score': 0,
-            'APCE': 0
+            'APCE': 0,
+            'plain_collaboration_diagnostics':
+                _empty_plain_collaboration_diagnostic("A")
+                if plain_save_diagnostics else None,
         }
         init_default_b = {
             'target_bbox': init_info_b.get('init_bbox'),
             'time': time_b,
             'max_score': 0,
-            'APCE': 0
+            'APCE': 0,
+            'plain_collaboration_diagnostics':
+                _empty_plain_collaboration_diagnostic("B")
+                if plain_save_diagnostics else None,
         }
 
         init_default_c = {
             'target_bbox': init_info_c.get('init_bbox'),
             'time': time_c,
             'max_score': 0,
-            'APCE': 0
+            'APCE': 0,
+            'plain_collaboration_diagnostics':
+                _empty_plain_collaboration_diagnostic("C")
+                if plain_save_diagnostics else None,
         }
 
         if c3r_remote_enabled:
@@ -1535,7 +1625,7 @@ class Tracker:
         _store_outputs(output_c, out_c, init_default_c)
 
         # ------------------------------------------------------------
-        # 逐帧跟踪：三个视角完全独立
+        # 逐帧跟踪：默认独立；V1 显式交换同帧 final search features。
         # ------------------------------------------------------------
         for frame_num, frame_path in enumerate(seq_a.frames[1:], start=1):
             image_a = self._read_image(frame_path)
@@ -1579,7 +1669,49 @@ class Tracker:
                 and getattr(tracker3, "fcvc_enabled", False)
             )
 
-            if fcvc_enabled:
+            if plain_remote_enabled:
+                start_time_a = time.time()
+                local_a = tracker.plain_collaboration_local_candidate(image_a)
+                local_time_a = time.time() - start_time_a
+                start_time_b = time.time()
+                local_b = tracker2.plain_collaboration_local_candidate(image_b)
+                local_time_b = time.time() - start_time_b
+                start_time_c = time.time()
+                local_c = tracker3.plain_collaboration_local_candidate(image_c)
+                local_time_c = time.time() - start_time_c
+
+                start_time_a = time.time()
+                collaborative_a = tracker.plain_collaboration_candidate(
+                    local_a, (local_b, local_c), "A", ("B", "C"), frame_num)
+                out_a, max_score_a, response_APCE_a = (
+                    tracker.plain_collaboration_finalize_frame(
+                        collaborative_a, info=info_a, debug_name="plain-v1-a"))
+                time_a = local_time_a + (time.time() - start_time_a)
+
+                start_time_b = time.time()
+                collaborative_b = tracker2.plain_collaboration_candidate(
+                    local_b, (local_a, local_c), "B", ("A", "C"), frame_num)
+                out_b, max_score_b, response_APCE_b = (
+                    tracker2.plain_collaboration_finalize_frame(
+                        collaborative_b, info=info_b, debug_name="plain-v1-b"))
+                time_b = local_time_b + (time.time() - start_time_b)
+
+                start_time_c = time.time()
+                collaborative_c = tracker3.plain_collaboration_candidate(
+                    local_c, (local_a, local_b), "C", ("A", "B"), frame_num)
+                out_c, max_score_c, response_APCE_c = (
+                    tracker3.plain_collaboration_finalize_frame(
+                        collaborative_c, info=info_c, debug_name="plain-v1-c"))
+                time_c = local_time_c + (time.time() - start_time_c)
+
+                score_a_val = _to_float(max_score_a)
+                score_b_val = _to_float(max_score_b)
+                score_c_val = _to_float(max_score_c)
+                apce_a_val = _to_float(response_APCE_a)
+                apce_b_val = _to_float(response_APCE_b)
+                apce_c_val = _to_float(response_APCE_c)
+
+            elif fcvc_enabled:
                 start_time_a = time.time()
                 candidate_a = tracker.fcvc_local_candidate(image_a)
                 local_time_a = time.time() - start_time_a

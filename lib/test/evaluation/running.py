@@ -18,6 +18,22 @@ import torch
 from lib.test.utils.c3r_inference import C3R_DIAGNOSTIC_COLUMNS
 
 
+PLAIN_COLLABORATION_DIAGNOSTIC_COLUMNS = (
+    "frame_id",
+    "receiver_view",
+    "sender_view_0",
+    "sender_view_1",
+    "used_remote",
+    "valid_remote_count",
+    "search_token_count",
+    "sender_weight_0",
+    "sender_weight_1",
+    "residual_norm",
+    "relative_residual_norm",
+    "residual_scale",
+)
+
+
 def _save_tracker_output(seq: Sequence, tracker: Tracker, output: dict):
     """Saves the output of the tracker."""
 
@@ -70,6 +86,16 @@ def _save_tracker_output(seq: Sequence, tracker: Tracker, output: dict):
                     if row:
                         json.dump(row, fh, sort_keys=True, separators=(',', ':'))
                         fh.write('\n')
+
+    def save_plain_collaboration_diagnostics(file, data):
+        with open(file, 'w', newline='') as fh:
+            writer = csv.DictWriter(
+                fh,
+                fieldnames=PLAIN_COLLABORATION_DIAGNOSTIC_COLUMNS,
+                extrasaction='raise',
+            )
+            writer.writeheader()
+            writer.writerows(data)
 
     def _convert_dict(input_dict):
         data_dict = {}
@@ -205,6 +231,11 @@ def _save_tracker_output(seq: Sequence, tracker: Tracker, output: dict):
             instrumentation_file = '{}_c3r_aggregate_instrumentation.jsonl.gz'.format(
                 base_results_path)
             save_c3r_instrumentation(instrumentation_file, data)
+
+        if key == 'plain_collaboration_diagnostics':
+            diagnostics_file = '{}_plain_collaboration.csv'.format(
+                base_results_path)
+            save_plain_collaboration_diagnostics(diagnostics_file, data)
 
         elif key == 'time':
             if isinstance(data[0], dict):
@@ -600,12 +631,38 @@ def run_three_multi_sequence(seq_a: Sequence, seq_b: Sequence ,seq_c: Sequence, 
     def _c3r_instrumentation_enabled():
         return bool(getattr(tracker, "c3r_instrumentation", False))
 
+    def _plain_collaboration_enabled():
+        if not hasattr(tracker, "_plain_collaboration_enabled"):
+            try:
+                params = tracker.get_parameters()
+                plain_cfg = getattr(
+                    params.cfg.TEST, "PLAIN_COLLABORATION", None)
+                tracker._plain_collaboration_enabled = bool(
+                    getattr(plain_cfg, "ENABLED", False))
+            except Exception:
+                tracker._plain_collaboration_enabled = False
+        return tracker._plain_collaboration_enabled
+
+    def _plain_collaboration_diagnostics_enabled():
+        if not hasattr(tracker, "_save_plain_collaboration_diagnostics"):
+            try:
+                params = tracker.get_parameters()
+                plain_cfg = getattr(
+                    params.cfg.TEST, "PLAIN_COLLABORATION", None)
+                tracker._save_plain_collaboration_diagnostics = bool(
+                    _plain_collaboration_enabled()
+                    and getattr(plain_cfg, "SAVE_DIAGNOSTICS", True))
+            except Exception:
+                tracker._save_plain_collaboration_diagnostics = False
+        return tracker._save_plain_collaboration_diagnostics
+
     def _sequence_results_exist(
         seq,
         need_decision_log=False,
         need_frame_diagnostics=False,
         need_motion_diagnostics=False,
         need_c3r_instrumentation=False,
+        need_plain_collaboration_diagnostics=False,
         uav_id="unknown",
     ):
         if seq.object_ids is None:
@@ -640,6 +697,10 @@ def run_three_multi_sequence(seq_a: Sequence, seq_b: Sequence ,seq_c: Sequence, 
                     if not os.path.isfile('{}/{}{}'.format(
                             tracker.results_dir, seq.name, suffix)):
                         return False
+            if need_plain_collaboration_diagnostics and not os.path.isfile(
+                    '{}/{}_plain_collaboration.csv'.format(
+                        tracker.results_dir, seq.name)):
+                return False
             return True
 
         bbox_files = [
@@ -677,6 +738,10 @@ def run_three_multi_sequence(seq_a: Sequence, seq_b: Sequence ,seq_c: Sequence, 
                 if not os.path.isfile('{}/{}{}'.format(
                         tracker.results_dir, seq.name, suffix)):
                     return False
+        if need_plain_collaboration_diagnostics and not os.path.isfile(
+                '{}/{}_plain_collaboration.csv'.format(
+                    tracker.results_dir, seq.name)):
+            return False
         return True
 
     def _results_exist_a():
@@ -684,8 +749,11 @@ def run_three_multi_sequence(seq_a: Sequence, seq_b: Sequence ,seq_c: Sequence, 
         need_frame_diagnostics = _pcum_frame_diagnostics_enabled()
         need_motion_diagnostics = _motion_state_log_enabled()
         need_c3r_instrumentation = _c3r_instrumentation_enabled()
+        need_plain_diagnostics = (
+            _plain_collaboration_diagnostics_enabled())
         if (need_decision_log or need_frame_diagnostics
-                or need_motion_diagnostics or need_c3r_instrumentation):
+                or need_motion_diagnostics or need_c3r_instrumentation
+                or need_plain_diagnostics):
             return all(
                 _sequence_results_exist(
                     seq,
@@ -693,6 +761,8 @@ def run_three_multi_sequence(seq_a: Sequence, seq_b: Sequence ,seq_c: Sequence, 
                     need_frame_diagnostics=need_frame_diagnostics,
                     need_motion_diagnostics=need_motion_diagnostics,
                     need_c3r_instrumentation=need_c3r_instrumentation,
+                    need_plain_collaboration_diagnostics=(
+                        need_plain_diagnostics),
                     uav_id=uav_id,
                 )
                 for seq, uav_id in ((seq_a, "A"), (seq_b, "B"), (seq_c, "C"))
@@ -712,6 +782,8 @@ def run_three_multi_sequence(seq_a: Sequence, seq_b: Sequence ,seq_c: Sequence, 
             output_a, output_b, output_c = tracker.Fuse_three_multi_run_sequence(seq_a, seq_b, seq_c, debug=debug)
         except Exception as e:
             print(e)
+            if _plain_collaboration_enabled():
+                raise
             return
 
     sys.stdout.flush()

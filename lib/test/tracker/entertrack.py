@@ -518,6 +518,31 @@ class EnTeRTrack(BaseTracker):
 
         self.network = network.cuda()
         self.network.eval()
+        plain_model_enabled = bool(getattr(
+            getattr(self.cfg.MODEL, "PLAIN_COLLABORATION", None),
+            "ENABLED", False))
+        plain_test_enabled = bool(getattr(
+            getattr(self.cfg.TEST, "PLAIN_COLLABORATION", None),
+            "ENABLED", False))
+        if plain_model_enabled != plain_test_enabled:
+            raise RuntimeError(
+                "Plain Collaboration MODEL/TEST enable flags must match")
+        self.plain_collaboration_enabled = bool(
+            plain_model_enabled and plain_test_enabled)
+        if self.plain_collaboration_enabled:
+            if self.network.plain_collaboration is None:
+                raise RuntimeError(
+                    "Plain Collaboration inference requires the V1 adapter")
+            if any((
+                    self.network.pcum is not None,
+                    self.network.c3r is not None,
+                    self.network.search_prompt_gate is not None)):
+                raise RuntimeError(
+                    "Plain Collaboration inference is exclusive with "
+                    "PCUM/C3R/search prompt")
+            if int(self.network.feat_len_s) != 256:
+                raise RuntimeError(
+                    "Plain Collaboration V1 requires 256 search tokens")
         self.fcvc_enabled = bool(
             str(getattr(getattr(self.cfg.MODEL, "COLLABORATION", None), "TYPE", "")).lower() == "fcvc"
             and bool(getattr(getattr(self.cfg.MODEL, "FCVC", None), "ENABLED", False))
@@ -663,7 +688,8 @@ class EnTeRTrack(BaseTracker):
             network.load_state_dict(state_dict, strict=True)
 
         except RuntimeError:
-            if getattr(network, "c3r", None) is not None:
+            if (getattr(network, "c3r", None) is not None
+                    or getattr(network, "plain_collaboration", None) is not None):
                 raise
             new_state_dict = {}
 
@@ -1898,6 +1924,185 @@ class EnTeRTrack(BaseTracker):
             return_score=True
         )
 
+    def plain_collaboration_local_candidate(self, image):
+        """Run exactly one frozen local backbone/head pass for a V1 frame."""
+        if not self.plain_collaboration_enabled:
+            raise RuntimeError(
+                "Plain Collaboration local candidate requested while disabled")
+        candidate = self._run_candidate(
+            image=image,
+            search_factor=self.params.search_factor,
+            return_score=True,
+        )
+        feature = candidate["out_dict"].get("backbone_feat", None)
+        if not torch.is_tensor(feature) or feature.dim() != 3:
+            raise RuntimeError(
+                "Plain Collaboration local candidate is missing [B,L,C] feature")
+        if feature.shape[0] != 1:
+            raise RuntimeError(
+                "Plain Collaboration inference requires batch size one per view")
+        if feature.shape[1] < int(self.network.feat_len_s):
+            raise RuntimeError(
+                "Plain Collaboration local feature has too few search tokens")
+        if not bool(torch.isfinite(feature).all().item()):
+            raise RuntimeError(
+                "Plain Collaboration local feature contains non-finite values")
+        return candidate
+
+    @staticmethod
+    def _plain_scalar(value):
+        if torch.is_tensor(value):
+            if value.numel() != 1:
+                raise ValueError(
+                    "Plain Collaboration diagnostic value must be scalar")
+            return float(value.detach().cpu().item())
+        return float(value)
+
+    def plain_collaboration_candidate(
+            self, local_candidate, remote_candidates, receiver_view,
+            sender_views, frame_id):
+        """Fuse two synchronized remote final-search features and rerun head."""
+        if not self.plain_collaboration_enabled:
+            raise RuntimeError(
+                "Plain Collaboration candidate requested while disabled")
+        remote_candidates = tuple(remote_candidates)
+        sender_views = tuple(str(value).upper() for value in sender_views)
+        receiver_view = str(receiver_view).upper()
+        if receiver_view not in ("A", "B", "C"):
+            raise ValueError("Plain Collaboration receiver must be A, B, or C")
+        expected_senders = tuple(
+            view for view in ("A", "B", "C") if view != receiver_view)
+        if sender_views != expected_senders or len(remote_candidates) != 2:
+            raise ValueError(
+                "Plain Collaboration requires canonical two-sender order {}"
+                .format(expected_senders))
+
+        feature = local_candidate["out_dict"].get("backbone_feat", None)
+        if not torch.is_tensor(feature):
+            raise RuntimeError("Local candidate is missing backbone_feat")
+        feat_len_s = int(self.network.feat_len_s)
+        local_search = feature[:, -feat_len_s:]
+        remote_search = []
+        for sender_view, candidate in zip(sender_views, remote_candidates):
+            remote_feature = candidate["out_dict"].get("backbone_feat", None)
+            if not torch.is_tensor(remote_feature):
+                raise RuntimeError(
+                    "Remote {} candidate is missing backbone_feat".format(
+                        sender_view))
+            if tuple(remote_feature.shape) != tuple(feature.shape):
+                raise RuntimeError(
+                    "Remote {} feature shape does not match receiver {}"
+                    .format(sender_view, receiver_view))
+            remote_search.append(remote_feature[:, -feat_len_s:].detach().to(
+                device=local_search.device, dtype=local_search.dtype))
+        remote_tokens = torch.stack(remote_search, dim=1)
+        remote_valid = torch.isfinite(remote_tokens).flatten(2).all(dim=2)
+        if not bool(remote_valid.all().item()):
+            raise RuntimeError(
+                "Plain Collaboration requires two finite remote senders")
+
+        with torch.no_grad():
+            head_output = self.network(
+                template=None,
+                search=None,
+                training=False,
+                collaboration_feature=feature.detach(),
+                plain_remote_tokens=remote_tokens,
+                plain_remote_valid=remote_valid,
+            )
+        collaboration = head_output.get("plain_collaboration", None)
+        if not isinstance(collaboration, dict):
+            raise RuntimeError(
+                "Plain Collaboration head output is missing diagnostics")
+        valid_remote_count = collaboration["valid_remote_count"]
+        if valid_remote_count.numel() != 1 or int(
+                valid_remote_count.detach().cpu().item()) != 2:
+            raise RuntimeError(
+                "Plain Collaboration did not use both remote senders")
+        if not bool(collaboration.get("used_remote", False)):
+            raise RuntimeError("Plain Collaboration adapter bypassed remote input")
+
+        pred_box, pred_boxes, max_score, response = self._decode_prediction(
+            head_output,
+            local_candidate["resize_factor"],
+            return_score=True,
+        )
+        image = local_candidate["image"]
+        height, width = image.shape[:2]
+        crop_bbox = local_candidate["crop_bbox"]
+        target_bbox = clip_box(
+            self.map_box_back(
+                pred_box,
+                local_candidate["resize_factor"],
+                reference_bbox=crop_bbox,
+            ),
+            height,
+            width,
+            margin=10,
+        )
+        if self.save_all_boxes:
+            all_boxes = self.map_box_back_batch(
+                pred_boxes * self.params.search_size
+                / local_candidate["resize_factor"],
+                local_candidate["resize_factor"],
+                reference_bbox=crop_bbox,
+            )
+            output = {
+                "target_bbox": target_bbox,
+                "all_boxes": all_boxes.view(-1).tolist(),
+            }
+        else:
+            output = {"target_bbox": target_bbox}
+
+        weights = collaboration["remote_weights"].detach().reshape(-1).cpu()
+        diagnostics = {
+            "frame_id": int(frame_id),
+            "receiver_view": receiver_view,
+            "sender_view_0": sender_views[0],
+            "sender_view_1": sender_views[1],
+            "used_remote": True,
+            "valid_remote_count": 2,
+            "search_token_count": int(local_search.shape[1]),
+            "sender_weight_0": float(weights[0].item()),
+            "sender_weight_1": float(weights[1].item()),
+            "residual_norm": self._plain_scalar(
+                collaboration["residual_norm"]),
+            "relative_residual_norm": self._plain_scalar(
+                collaboration["relative_residual_norm"]),
+            "residual_scale": self._plain_scalar(
+                collaboration["residual_scale"]),
+        }
+        candidate = dict(local_candidate)
+        candidate.update({
+            "output": output,
+            "target_bbox": target_bbox,
+            "max_score": max_score,
+            "apce": self.calAPCE(response),
+            "response": response,
+            "out_dict": head_output,
+            "pred_boxes": pred_boxes,
+            "used_remote": True,
+            "plain_collaboration_diagnostics": diagnostics,
+        })
+        return candidate
+
+    def plain_collaboration_finalize_frame(
+            self, collaborative_candidate, info=None, debug_name=""):
+        """Commit the collaborative bbox as this receiver's next-frame state."""
+        if not self.plain_collaboration_enabled:
+            raise RuntimeError(
+                "Plain Collaboration finalize requested while disabled")
+        self.frame_id += 1
+        output = self._commit_candidate(
+            collaborative_candidate, info=info, debug_name=debug_name)
+        output["plain_collaboration_diagnostics"] = dict(
+            collaborative_candidate["plain_collaboration_diagnostics"])
+        return (
+            output,
+            collaborative_candidate["max_score"],
+            collaborative_candidate["apce"],
+        )
+
     def c3r_local_candidate(self, image):
         """Run and retain exactly one ordinary local EnTeR candidate."""
         if not self.c3r_enabled:
@@ -2602,6 +2807,10 @@ class EnTeRTrack(BaseTracker):
         """
         标准单机 track。
         """
+        if self.plain_collaboration_enabled:
+            raise RuntimeError(
+                "Plain Collaboration V1 requires the Three-MDOT "
+                "synchronized three-view runner")
         return self._track_single(
             image=image,
             info=info,
@@ -2619,6 +2828,9 @@ class EnTeRTrack(BaseTracker):
 
         当前版本不做融合，只做单机 EnTeRTrack。
         """
+        if self.plain_collaboration_enabled:
+            raise RuntimeError(
+                "Plain Collaboration V1 must not use independent Fusetrack")
         return self._track_single(
             image=image,
             info=info,

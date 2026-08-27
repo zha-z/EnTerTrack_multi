@@ -55,6 +55,9 @@ TRAIN:
 TEST:
   SAVE_DIR: output/diagnostics/plain_collaboration_v1
   CHECKPOINT_NAME: plain_collaboration_v1
+  PLAIN_COLLABORATION:
+    ENABLED: true
+    SAVE_DIAGNOSTICS: true
   PCUM:
     USE_REMOTE: false
     REMOTE_STATE_SOURCE: none
