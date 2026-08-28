@@ -1,0 +1,6 @@
+BASE_CONFIG: plain_collaboration_v1_e15_sender_counterfactual
+EXPERIMENT_NAME: B0-ABC-Plain-Collaboration-V1-E2B-Target-Consistency
+
+TEST:
+  PLAIN_COLLABORATION:
+    SAVE_TARGET_CONSISTENCY_DIAGNOSTICS: true

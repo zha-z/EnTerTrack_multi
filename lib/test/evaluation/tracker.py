@@ -2,6 +2,7 @@ import importlib
 import os
 import json
 import hashlib
+import numpy as np
 from collections import OrderedDict
 from lib.test.evaluation.environment import env_settings
 import time
@@ -833,6 +834,13 @@ class Tracker:
                 "SAVE_SENDER_COUNTERFACTUAL_DIAGNOSTICS",
                 False,
             ))
+        plain_save_target_consistency = bool(
+            plain_remote_enabled
+            and getattr(
+                plain_test_cfg,
+                "SAVE_TARGET_CONSISTENCY_DIAGNOSTICS",
+                False,
+            ))
         plain_safe_commit_values = tuple(bool(getattr(
             item, "plain_collaboration_safe_commit", False)) for item in (
                 tracker, tracker2, tracker3))
@@ -876,6 +884,16 @@ class Tracker:
                             False)):
                         raise RuntimeError(
                             "sender counterfactual requires SAFE_COMMIT")
+            if plain_save_target_consistency:
+                if not plain_save_sender_counterfactual:
+                    raise RuntimeError(
+                        "target consistency requires sender counterfactuals")
+                for active_tracker in (tracker, tracker2, tracker3):
+                    if not hasattr(
+                            active_tracker,
+                            "plain_collaboration_target_prototype_row"):
+                        raise RuntimeError(
+                            "target consistency prototype builder is missing")
             if any((
                     bool(getattr(tracker, "fcvc_enabled", False)),
                     bool(getattr(tracker, "c3r_enabled", False)),
@@ -900,12 +918,18 @@ class Tracker:
                 output_a['plain_collaboration_sender_counterfactual'] = []
                 output_b['plain_collaboration_sender_counterfactual'] = []
                 output_c['plain_collaboration_sender_counterfactual'] = []
+            if plain_save_target_consistency:
+                output_a['plain_collaboration_target_prototypes'] = []
+                output_b['plain_collaboration_target_prototypes'] = []
+                output_c['plain_collaboration_target_prototypes'] = []
             print(
                 "[Plain Collaboration V1 inference] enabled=true "
                 "search_tokens=256 senders_per_receiver=2 uses_gt=false "
-                "safe_commit={} sender_counterfactual={} target={}".format(
+                "safe_commit={} sender_counterfactual={} "
+                "target_consistency={} target={}".format(
                     str(plain_safe_commit_values[0]).lower(),
                     str(plain_save_sender_counterfactual).lower(),
+                    str(plain_save_target_consistency).lower(),
                     target_id))
         c3r_model_enabled = bool(getattr(
             getattr(tracker.cfg.MODEL, "C3R", None), "ENABLED", False))
@@ -1045,7 +1069,8 @@ class Tracker:
                     "c3r_aggregate_instrumentation",
                     "plain_collaboration_diagnostics",
                     "plain_collaboration_counterfactual",
-                    "plain_collaboration_sender_counterfactual")
+                    "plain_collaboration_sender_counterfactual",
+                    "plain_collaboration_target_prototypes")
             )
 
         def _to_float(x):
@@ -1201,6 +1226,32 @@ class Tracker:
                     })
                 rows.append(row)
             return rows
+
+        def _empty_plain_target_prototype(receiver_view, initial_bbox):
+            token_dim = int(tracker.network.plain_collaboration.token_dim)
+            nan_vector = np.full((token_dim,), np.nan, dtype=np.float32)
+            return {
+                "target_id": target_id,
+                "view_id": receiver_view,
+                "frame_id": 0,
+                "uses_gt": False,
+                "source_local": True,
+                "search_token_count": 256,
+                "template_token_count": 64,
+                "token_dim": token_dim,
+                "temperature": 1.0,
+                "target_bbox": np.asarray(
+                    [float(value) for value in initial_bbox],
+                    dtype=np.float32),
+                "response_weighted": nan_vector.copy(),
+                "global_mean": nan_vector.copy(),
+                "template_conditioned": nan_vector.copy(),
+                "response_weighted_norm": float("nan"),
+                "global_mean_norm": float("nan"),
+                "template_conditioned_norm": float("nan"),
+                "persistent_state_digest_before": "initialization",
+                "persistent_state_digest_after": "initialization",
+            }
 
         def _plain_receiver_counterfactual(
                 active_tracker, local_candidate, remote_candidates,
@@ -1715,6 +1766,10 @@ class Tracker:
                 _empty_plain_sender_counterfactual(
                     "A", init_info_a.get('init_bbox'))
                 if plain_save_sender_counterfactual else None,
+            'plain_collaboration_target_prototypes':
+                _empty_plain_target_prototype(
+                    "A", init_info_a.get('init_bbox'))
+                if plain_save_target_consistency else None,
         }
         init_default_b = {
             'target_bbox': init_info_b.get('init_bbox'),
@@ -1732,6 +1787,10 @@ class Tracker:
                 _empty_plain_sender_counterfactual(
                     "B", init_info_b.get('init_bbox'))
                 if plain_save_sender_counterfactual else None,
+            'plain_collaboration_target_prototypes':
+                _empty_plain_target_prototype(
+                    "B", init_info_b.get('init_bbox'))
+                if plain_save_target_consistency else None,
         }
 
         init_default_c = {
@@ -1750,6 +1809,10 @@ class Tracker:
                 _empty_plain_sender_counterfactual(
                     "C", init_info_c.get('init_bbox'))
                 if plain_save_sender_counterfactual else None,
+            'plain_collaboration_target_prototypes':
+                _empty_plain_target_prototype(
+                    "C", init_info_c.get('init_bbox'))
+                if plain_save_target_consistency else None,
         }
 
         if c3r_remote_enabled:
@@ -1931,6 +1994,15 @@ class Tracker:
                 start_time_c = time.time()
                 local_c = tracker3.plain_collaboration_local_candidate(image_c)
                 local_time_c = time.time() - start_time_c
+                if plain_save_target_consistency:
+                    target_row_a = tracker.plain_collaboration_target_prototype_row(
+                        local_a, "A", frame_num, target_id)
+                    target_row_b = tracker2.plain_collaboration_target_prototype_row(
+                        local_b, "B", frame_num, target_id)
+                    target_row_c = tracker3.plain_collaboration_target_prototype_row(
+                        local_c, "C", frame_num, target_id)
+                else:
+                    target_row_a = target_row_b = target_row_c = None
                 if plain_save_sender_counterfactual:
                     local_forward_counts_after = tuple(int(getattr(
                         item, "_plain_collaboration_local_forward_count", 0))
@@ -1954,6 +2026,8 @@ class Tracker:
                 if sender_rows_a is not None:
                     out_a["plain_collaboration_sender_counterfactual"] = (
                         sender_rows_a)
+                if target_row_a is not None:
+                    out_a["plain_collaboration_target_prototypes"] = target_row_a
                 time_a = local_time_a + (time.time() - start_time_a)
 
                 start_time_b = time.time()
@@ -1967,6 +2041,8 @@ class Tracker:
                 if sender_rows_b is not None:
                     out_b["plain_collaboration_sender_counterfactual"] = (
                         sender_rows_b)
+                if target_row_b is not None:
+                    out_b["plain_collaboration_target_prototypes"] = target_row_b
                 time_b = local_time_b + (time.time() - start_time_b)
 
                 start_time_c = time.time()
@@ -1980,6 +2056,8 @@ class Tracker:
                 if sender_rows_c is not None:
                     out_c["plain_collaboration_sender_counterfactual"] = (
                         sender_rows_c)
+                if target_row_c is not None:
+                    out_c["plain_collaboration_target_prototypes"] = target_row_c
                 time_c = local_time_c + (time.time() - start_time_c)
 
                 score_a_val = _to_float(max_score_a)

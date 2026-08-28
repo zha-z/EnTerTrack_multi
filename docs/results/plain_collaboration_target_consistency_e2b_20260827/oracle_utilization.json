@@ -1,0 +1,30 @@
+{
+  "artifact_oracle_utilization": -0.09966431754193186,
+  "both_safe_auc": 0.6489428002241017,
+  "dataset": "threemdot_val",
+  "decision_case": "D",
+  "e2a_t4_auc": 0.6481518365850988,
+  "e2a_task_a_t4_roc_auc": 0.4013773833280231,
+  "e2b_mean_s5_auc": 0.6475960008275138,
+  "e2b_weighted_s5_auc": 0.6475388599349894,
+  "gates": {
+    "primary_gain_ge_0_003": false,
+    "representation_roc_advantage_ge_0_03": false,
+    "representation_tracking_advantage_ge_0_001": false,
+    "safety_no_target_le_minus_0_05": true,
+    "semantic_pr_above_prior": false,
+    "semantic_roc_ge_0_65": false
+  },
+  "gt_oracle_single_auc": 0.662076458365821,
+  "gt_oracle_upper_bound_only": true,
+  "local_auc": 0.6488564254894907,
+  "oracle_headroom": 0.013220032876330223,
+  "oracle_utilization": -0.09963238010670208,
+  "representation_success": false,
+  "task_a_mean_s5_roc_auc": 0.37532427514966543,
+  "task_a_positive_prior": 0.44606281292671823,
+  "task_a_weighted_s5_pr_auc": 0.39698077685843614,
+  "task_a_weighted_s5_roc_auc": 0.37777929166736535,
+  "weighted_gain": -0.0013175655545013543,
+  "worst_target_auc_delta": -0.004123711340206171
+}

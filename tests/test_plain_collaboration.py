@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from types import SimpleNamespace
 
+import numpy as np
 import torch
 from torch import nn
 
@@ -278,6 +279,9 @@ class PlainCollaborationIntegrationTests(unittest.TestCase):
         self.assertFalse(
             cfg.TEST.PLAIN_COLLABORATION
             .SAVE_SENDER_COUNTERFACTUAL_DIAGNOSTICS)
+        self.assertFalse(
+            cfg.TEST.PLAIN_COLLABORATION
+            .SAVE_TARGET_CONSISTENCY_DIAGNOSTICS)
         local_cfg = copy.deepcopy(cfg)
         update_config_from_file(
             "experiments/entertrack/"
@@ -293,6 +297,22 @@ class PlainCollaborationIntegrationTests(unittest.TestCase):
         self.assertFalse(local_cfg.MODEL.PCUM.ENABLED)
         self.assertFalse(local_cfg.MODEL.C3R.ENABLED)
         self.assertFalse(local_cfg.MODEL.FCVC.ENABLED)
+
+        e2b_cfg = copy.deepcopy(cfg)
+        update_config_from_file(
+            "experiments/entertrack/"
+            "plain_collaboration_v1_e2b_target_consistency.yaml",
+            base_cfg=e2b_cfg,
+        )
+        plain = e2b_cfg.TEST.PLAIN_COLLABORATION
+        self.assertTrue(plain.ENABLED)
+        self.assertTrue(plain.SAFE_COMMIT)
+        self.assertTrue(plain.SAVE_SENDER_COUNTERFACTUAL_DIAGNOSTICS)
+        self.assertTrue(plain.SAVE_TARGET_CONSISTENCY_DIAGNOSTICS)
+        self.assertFalse(plain.SAVE_COUNTERFACTUAL_DIAGNOSTICS)
+        self.assertFalse(e2b_cfg.MODEL.PCUM.ENABLED)
+        self.assertFalse(e2b_cfg.MODEL.C3R.ENABLED)
+        self.assertFalse(e2b_cfg.MODEL.FCVC.ENABLED)
 
 
 class PlainCollaborationInferenceTests(unittest.TestCase):
@@ -331,6 +351,7 @@ class PlainCollaborationInferenceTests(unittest.TestCase):
         runtime.plain_collaboration_safe_commit = False
         runtime.plain_collaboration_counterfactual_diagnostics = False
         runtime.plain_collaboration_sender_counterfactual_diagnostics = False
+        runtime.plain_collaboration_target_consistency_diagnostics = False
         runtime._decode_prediction = lambda output, resize_factor, return_score: (
             [0.0, 0.0, 20.0, 20.0],
             torch.tensor([[0.5, 0.5, 0.25, 0.25]]),
@@ -443,6 +464,38 @@ class PlainCollaborationInferenceTests(unittest.TestCase):
             row["persistent_state_digest_before"],
             row["persistent_state_digest_after"],
         )
+
+    def test_target_prototype_uses_raw_response_and_is_state_identity(self):
+        runtime = self._runtime_tracker()
+        runtime.plain_collaboration_safe_commit = True
+        runtime.plain_collaboration_sender_counterfactual_diagnostics = True
+        runtime.plain_collaboration_target_consistency_diagnostics = True
+        local = self._candidate(0.0)
+        feature = local["out_dict"]["backbone_feat"]
+        feature[:, :64] = 3.0
+        feature[:, 64:] = torch.arange(
+            256, dtype=feature.dtype).view(1, 256, 1)
+        raw_score = torch.zeros(1, 1, 16, 16)
+        raw_score.reshape(1, -1)[0, 255] = 2.0
+        local["out_dict"]["score_map"] = raw_score
+        digest = runtime.fcvc_persistent_state_digest()
+        row = runtime.plain_collaboration_target_prototype_row(
+            local, receiver_view="A", frame_id=4, target_id="T0")
+
+        weights = torch.softmax(raw_score.reshape(1, -1), dim=1)
+        expected = torch.sum(
+            feature[:, 64:] * weights.unsqueeze(-1), dim=1)[0]
+        np.testing.assert_allclose(
+            row["response_weighted"], expected.numpy(), rtol=1e-6)
+        np.testing.assert_allclose(row["global_mean"], 127.5)
+        np.testing.assert_allclose(row["template_conditioned"], 3.0)
+        self.assertEqual(row["search_token_count"], 256)
+        self.assertEqual(row["template_token_count"], 64)
+        self.assertEqual(row["token_dim"], 12)
+        self.assertFalse(row["uses_gt"])
+        self.assertEqual(row["persistent_state_digest_before"], digest)
+        self.assertEqual(row["persistent_state_digest_after"], digest)
+        self.assertEqual(runtime.fcvc_persistent_state_digest(), digest)
 
     def test_runtime_rejects_checkpoint_without_adapter(self):
         runtime = RuntimeEnTeRTrack.__new__(RuntimeEnTeRTrack)

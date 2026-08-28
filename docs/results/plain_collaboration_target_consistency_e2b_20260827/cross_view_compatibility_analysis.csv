@@ -1,0 +1,5 @@
+task,feature_set,scope,feature_count,cv,target_folds,eligible_rows,oof_rows,label_coverage,positive_rate,roc_auc,pr_auc,precision_at_0_5,recall_at_0_5,tn,fp,fn,tp,uses_gt_at_decision,posthoc_diagnostic_only
+A_helpful_vs_harmful,weighted_cross_cosine,overall,1,leave_one_target_out,5,4394,4394,0.16276485405245222,0.44606281292671823,0.40212602501970385,0.4212312570620593,0.3837894007620367,0.5653061224489796,655,1779,852,1108,False,True
+A_helpful_vs_harmful,weighted_cross_sender_template_interaction,overall,1,leave_one_target_out,5,4394,4394,0.16276485405245222,0.44606281292671823,0.449947176898697,0.463433293186007,0.38295165394402036,0.6142857142857143,494,1940,756,1204,False,True
+A_helpful_vs_harmful,mean_cross_cosine,overall,1,leave_one_target_out,5,4394,4394,0.16276485405245222,0.44606281292671823,0.4036088449348515,0.4225412617810493,0.3823631927500871,0.5596938775510204,662,1772,863,1097,False,True
+A_helpful_vs_harmful,mean_cross_sender_template_interaction,overall,1,leave_one_target_out,5,4394,4394,0.16276485405245222,0.44606281292671823,0.4510468197139168,0.4643346972155035,0.3832697201017812,0.6147959183673469,495,1939,755,1205,False,True

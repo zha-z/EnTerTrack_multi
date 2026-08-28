@@ -1,0 +1,22 @@
+{
+  "artifact_date": "2026-08-27",
+  "branch": "feature/pcum-cross-layer-arp",
+  "checkpoint": {
+    "epoch": 25,
+    "path": "output/diagnostics/plain_collaboration_v1/e1_run_20260827_seed42_4gpu_r001/checkpoints/train/entertrack/plain_collaboration_v1/EnTeRTrack_ep0025.pth.tar",
+    "sha256": "0607e8dcd05d9732a0058bb7a3d9e356474dbeb219a65e0472ac83a83d58ad40"
+  },
+  "cv": "leave-one-target-out",
+  "dataset": "threemdot_val",
+  "feature_sha256_verified": "bac418da99df955e29fdeed0e466b53fd585a58c03345e3159cf3c75d4c08cf2",
+  "model": "LogisticRegression C=1 balanced liblinear seed=42",
+  "official_test_used": false,
+  "prediction_manifest_sha256": "fd024616ecb8d15667fe9c95adc3a322be08abffcb1a3ae389ed2685f95445e8",
+  "prototype_sha256_verified": "59406d54758c322150067b0bf556382929b26b449943376b0a077643002f4e23",
+  "python": "3.8.20",
+  "runtime_uses_gt": false,
+  "safe_report_only": true,
+  "sklearn": "1.1.3",
+  "target_folds": 5,
+  "training_run": false
+}

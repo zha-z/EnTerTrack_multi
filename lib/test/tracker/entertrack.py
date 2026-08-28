@@ -3,6 +3,7 @@ import os
 import copy
 import hashlib
 import json
+import numpy as np
 import torch
 try:
     import cv2
@@ -541,6 +542,12 @@ class EnTeRTrack(BaseTracker):
                 "SAVE_SENDER_COUNTERFACTUAL_DIAGNOSTICS",
                 False,
             ))
+        self.plain_collaboration_target_consistency_diagnostics = bool(
+            getattr(
+                plain_test_cfg,
+                "SAVE_TARGET_CONSISTENCY_DIAGNOSTICS",
+                False,
+            ))
         self._plain_collaboration_local_forward_count = 0
         if self.plain_collaboration_safe_commit and not self.plain_collaboration_enabled:
             raise RuntimeError(
@@ -557,6 +564,19 @@ class EnTeRTrack(BaseTracker):
                 and not self.plain_collaboration_safe_commit):
             raise RuntimeError(
                 "Plain Collaboration sender counterfactuals require SAFE_COMMIT")
+        if (self.plain_collaboration_target_consistency_diagnostics
+                and not self.plain_collaboration_enabled):
+            raise RuntimeError(
+                "Plain Collaboration target consistency diagnostics require inference")
+        if (self.plain_collaboration_target_consistency_diagnostics
+                and not self.plain_collaboration_safe_commit):
+            raise RuntimeError(
+                "Plain Collaboration target consistency diagnostics require SAFE_COMMIT")
+        if (self.plain_collaboration_target_consistency_diagnostics
+                and not self.plain_collaboration_sender_counterfactual_diagnostics):
+            raise RuntimeError(
+                "Plain Collaboration target consistency diagnostics require "
+                "sender counterfactual diagnostics")
         if self.plain_collaboration_enabled:
             if self.network.plain_collaboration is None:
                 raise RuntimeError(
@@ -2246,6 +2266,91 @@ class EnTeRTrack(BaseTracker):
         current_area = max(bbox[2] * bbox[3], 1e-12)
         previous_area = max(previous[2] * previous[3], 1e-12)
         return center_motion, math.log(current_area / previous_area)
+
+    def plain_collaboration_target_prototype_row(
+            self, local_candidate, receiver_view, frame_id, target_id):
+        """Extract prediction-only local prototypes without changing runtime state."""
+        if not getattr(
+                self,
+                "plain_collaboration_target_consistency_diagnostics",
+                False):
+            raise RuntimeError("target consistency diagnostics are disabled")
+        receiver_view = str(receiver_view).upper()
+        if receiver_view not in ("A", "B", "C"):
+            raise ValueError("target prototype view must be A, B, or C")
+
+        state_digest_before = self.fcvc_persistent_state_digest()
+        out_dict = local_candidate.get("out_dict", {})
+        feature = out_dict.get("backbone_feat")
+        score_map = out_dict.get("score_map")
+        if not torch.is_tensor(feature) or feature.dim() != 3:
+            raise RuntimeError("target prototype requires [B,L,C] backbone_feat")
+        if feature.shape[0] != 1:
+            raise RuntimeError("target prototype requires batch size one")
+        feat_len_s = int(self.network.feat_len_s)
+        if feat_len_s != 256:
+            raise RuntimeError("target prototype requires exactly 256 search tokens")
+        template_len = int(feature.shape[1]) - feat_len_s
+        if template_len != 64:
+            raise RuntimeError("target prototype requires exactly 64 template tokens")
+        expected_dim = int(self.network.plain_collaboration.token_dim)
+        if int(feature.shape[2]) != expected_dim:
+            raise RuntimeError("target prototype token dimension does not match adapter")
+        if not torch.is_tensor(score_map):
+            raise RuntimeError("target prototype requires CENTER raw score_map")
+
+        search_tokens = feature[:, -feat_len_s:]
+        template_tokens = feature[:, :-feat_len_s]
+        raw_response = score_map.reshape(score_map.shape[0], -1)
+        if tuple(raw_response.shape) != (1, feat_len_s):
+            raise RuntimeError("target prototype score_map/token layout mismatch")
+        if not bool(torch.isfinite(search_tokens).all().item()):
+            raise RuntimeError("target prototype search tokens are non-finite")
+        if not bool(torch.isfinite(template_tokens).all().item()):
+            raise RuntimeError("target prototype template tokens are non-finite")
+        if not bool(torch.isfinite(raw_response).all().item()):
+            raise RuntimeError("target prototype raw response is non-finite")
+
+        with torch.no_grad():
+            weights = torch.softmax(raw_response.float(), dim=1).to(
+                dtype=search_tokens.dtype)
+            weighted = torch.sum(search_tokens * weights.unsqueeze(-1), dim=1)
+            global_mean = search_tokens.mean(dim=1)
+            template_conditioned = template_tokens.mean(dim=1)
+        state_digest_after = self.fcvc_persistent_state_digest()
+        if state_digest_after != state_digest_before:
+            raise RuntimeError("target prototype extraction mutated persistent state")
+
+        def vector(value):
+            return value[0].detach().float().cpu().numpy()
+
+        weighted_np = vector(weighted)
+        mean_np = vector(global_mean)
+        template_np = vector(template_conditioned)
+        bbox = np.asarray(
+            [float(value) for value in local_candidate["target_bbox"]],
+            dtype=np.float32,
+        )
+        return {
+            "target_id": str(target_id),
+            "view_id": receiver_view,
+            "frame_id": int(frame_id),
+            "uses_gt": False,
+            "source_local": True,
+            "search_token_count": feat_len_s,
+            "template_token_count": template_len,
+            "token_dim": expected_dim,
+            "temperature": 1.0,
+            "target_bbox": bbox,
+            "response_weighted": weighted_np,
+            "global_mean": mean_np,
+            "template_conditioned": template_np,
+            "response_weighted_norm": float(np.linalg.norm(weighted_np)),
+            "global_mean_norm": float(np.linalg.norm(mean_np)),
+            "template_conditioned_norm": float(np.linalg.norm(template_np)),
+            "persistent_state_digest_before": state_digest_before,
+            "persistent_state_digest_after": state_digest_after,
+        }
 
     def plain_collaboration_sender_counterfactual_row(
             self, local_candidate, branch_candidate, remote_candidates,

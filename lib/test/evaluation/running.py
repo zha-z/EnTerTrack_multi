@@ -160,6 +160,30 @@ def _save_tracker_output(seq: Sequence, tracker: Tracker, output: dict):
             writer.writeheader()
             writer.writerows(rows)
 
+    def save_plain_collaboration_target_prototypes(file, data):
+        if not data:
+            raise ValueError("target prototype output is empty")
+        vector_keys = (
+            "target_bbox", "response_weighted", "global_mean",
+            "template_conditioned",
+        )
+        scalar_keys = (
+            "target_id", "view_id", "frame_id", "uses_gt", "source_local",
+            "search_token_count", "template_token_count", "token_dim",
+            "temperature", "response_weighted_norm", "global_mean_norm",
+            "template_conditioned_norm", "persistent_state_digest_before",
+            "persistent_state_digest_after",
+        )
+        payload = {
+            key: np.stack([
+                np.asarray(row[key]) for row in data
+            ], axis=0)
+            for key in vector_keys
+        }
+        for key in scalar_keys:
+            payload[key] = np.asarray([row[key] for row in data])
+        np.savez_compressed(file, **payload)
+
     def _convert_dict(input_dict):
         data_dict = {}
         for elem in input_dict:
@@ -311,6 +335,12 @@ def _save_tracker_output(seq: Sequence, tracker: Tracker, output: dict):
                     base_results_path))
             save_plain_collaboration_sender_counterfactual(
                 diagnostics_file, data)
+
+        if key == 'plain_collaboration_target_prototypes':
+            prototype_file = (
+                '{}_plain_collaboration_target_prototypes.npz'.format(
+                    base_results_path))
+            save_plain_collaboration_target_prototypes(prototype_file, data)
 
         elif key == 'time':
             if isinstance(data[0], dict):
@@ -763,6 +793,24 @@ def run_three_multi_sequence(seq_a: Sequence, seq_b: Sequence ,seq_c: Sequence, 
                 tracker._save_plain_collaboration_sender_counterfactual = False
         return tracker._save_plain_collaboration_sender_counterfactual
 
+    def _plain_collaboration_target_consistency_enabled():
+        if not hasattr(
+                tracker, "_save_plain_collaboration_target_consistency"):
+            try:
+                params = tracker.get_parameters()
+                plain_cfg = getattr(
+                    params.cfg.TEST, "PLAIN_COLLABORATION", None)
+                tracker._save_plain_collaboration_target_consistency = bool(
+                    _plain_collaboration_enabled()
+                    and getattr(
+                        plain_cfg,
+                        "SAVE_TARGET_CONSISTENCY_DIAGNOSTICS",
+                        False,
+                    ))
+            except Exception:
+                tracker._save_plain_collaboration_target_consistency = False
+        return tracker._save_plain_collaboration_target_consistency
+
     def _sequence_results_exist(
         seq,
         need_decision_log=False,
@@ -772,6 +820,7 @@ def run_three_multi_sequence(seq_a: Sequence, seq_b: Sequence ,seq_c: Sequence, 
         need_plain_collaboration_diagnostics=False,
         need_plain_collaboration_counterfactual=False,
         need_plain_collaboration_sender_counterfactual=False,
+        need_plain_collaboration_target_consistency=False,
         uav_id="unknown",
     ):
         if seq.object_ids is None:
@@ -817,6 +866,11 @@ def run_three_multi_sequence(seq_a: Sequence, seq_b: Sequence ,seq_c: Sequence, 
             if (need_plain_collaboration_sender_counterfactual
                     and not os.path.isfile(
                         '{}/{}_plain_collaboration_sender_counterfactual.csv'
+                        .format(tracker.results_dir, seq.name))):
+                return False
+            if (need_plain_collaboration_target_consistency
+                    and not os.path.isfile(
+                        '{}/{}_plain_collaboration_target_prototypes.npz'
                         .format(tracker.results_dir, seq.name))):
                 return False
             return True
@@ -869,6 +923,11 @@ def run_three_multi_sequence(seq_a: Sequence, seq_b: Sequence ,seq_c: Sequence, 
                     '{}/{}_plain_collaboration_sender_counterfactual.csv'
                     .format(tracker.results_dir, seq.name))):
             return False
+        if (need_plain_collaboration_target_consistency
+                and not os.path.isfile(
+                    '{}/{}_plain_collaboration_target_prototypes.npz'
+                    .format(tracker.results_dir, seq.name))):
+            return False
         return True
 
     def _results_exist_a():
@@ -882,10 +941,13 @@ def run_three_multi_sequence(seq_a: Sequence, seq_b: Sequence ,seq_c: Sequence, 
             _plain_collaboration_counterfactual_enabled())
         need_plain_sender_counterfactual = (
             _plain_collaboration_sender_counterfactual_enabled())
+        need_plain_target_consistency = (
+            _plain_collaboration_target_consistency_enabled())
         if (need_decision_log or need_frame_diagnostics
                 or need_motion_diagnostics or need_c3r_instrumentation
                 or need_plain_diagnostics or need_plain_counterfactual
-                or need_plain_sender_counterfactual):
+                or need_plain_sender_counterfactual
+                or need_plain_target_consistency):
             return all(
                 _sequence_results_exist(
                     seq,
@@ -899,6 +961,8 @@ def run_three_multi_sequence(seq_a: Sequence, seq_b: Sequence ,seq_c: Sequence, 
                         need_plain_counterfactual),
                     need_plain_collaboration_sender_counterfactual=(
                         need_plain_sender_counterfactual),
+                    need_plain_collaboration_target_consistency=(
+                        need_plain_target_consistency),
                     uav_id=uav_id,
                 )
                 for seq, uav_id in ((seq_a, "A"), (seq_b, "B"), (seq_c, "C"))
