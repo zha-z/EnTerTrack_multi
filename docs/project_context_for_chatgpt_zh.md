@@ -24,6 +24,17 @@
 
 ### 3.1 算法目标
 
+### 2.1 最新冻结实验状态（2026-08-28）
+
+最新受控结果见 [`docs/results/target_prompt_collaboration_e3_ep25_test_20260828/REPORT_ZH.md`](results/target_prompt_collaboration_e3_ep25_test_20260828/REPORT_ZH.md)。同一 Three-MDOT test、同一 OSTrack `calc_seq_err_robust`、105 个 A/B/C 独立序列宏平均口径下：
+
+- E0/B0 Plain ep25 AUC 48.9464；
+- E1/V1 full-search collaboration ep25 AUC 48.0028；
+- E3/K8 target semantic prompt ep25 AUC 48.7651。
+
+E3 相对 B0 为 -0.1813 AUC point，相对 E1 为 +0.7622 point。E3 的 no-GT、Safe Commit、remote-active 和 32x payload reduction 检查通过，但预注册主门槛 `B0 +0.30 point` 失败，因此结论是 **E3 FAIL / stop test-side tuning**。后续只能回到 inner-val/inner-dev 做 prediction-only utility 诊断，不能依据该 test 调 K、残差强度、阈值或逐视角权重。
+
+
 - 提升 Drone A/B/C 各单视角的 AUC、Precision 和 Norm Precision，而不只提高离线 fused 指标。
 - 重点改善遮挡、长遮挡、重出现、快速运动、模糊和视角不均衡条件下的鲁棒性。
 - 远端视角有用时产生可测收益，无用、延迟、错误或缺失时能够安全退回本地结果。

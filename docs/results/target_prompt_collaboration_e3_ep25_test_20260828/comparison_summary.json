@@ -1,0 +1,55 @@
+{
+  "delta_auc_points": {
+    "E3_minus_B0": -0.1812961598987639,
+    "E3_minus_E1": 0.7622388430122251
+  },
+  "overall": {
+    "B0": {
+      "auc": 0.48946360155249385,
+      "mean_iou": 0.5644671962852276,
+      "normalized_precision": 0.7760503459797876,
+      "precision": 0.6466585323186212
+    },
+    "E1": {
+      "auc": 0.48002825152338396,
+      "mean_iou": 0.5535730620398451,
+      "normalized_precision": 0.7675265311001028,
+      "precision": 0.6367390058433176
+    },
+    "E3": {
+      "auc": 0.4876506399535062,
+      "mean_iou": 0.5622285398586762,
+      "normalized_precision": 0.7742221042846008,
+      "precision": 0.6462724792286139
+    }
+  },
+  "paired_sequence_counts_vs_b0": {
+    "equal": 5,
+    "harmed": 70,
+    "improved": 30
+  },
+  "paired_target_counts_vs_b0": {
+    "equal": 0,
+    "harmed": 26,
+    "improved": 9
+  },
+  "primary_protocol": "105-view OSTrack sequence macro average",
+  "success_gates": {
+    "E3_above_E1": true,
+    "E3_at_least_B0_plus_0_30_auc_point": false,
+    "no_target_drop_ge_5_auc_points": true,
+    "payload_reduction_32x": true
+  },
+  "target_grouped_bootstrap_auc_delta_points_95ci": {
+    "E3_minus_B0": [
+      -0.2944809730549617,
+      -0.07477691409069673
+    ],
+    "E3_minus_E1": [
+      -0.478541812497055,
+      1.9980095597616785
+    ]
+  },
+  "targets_at_or_below_minus_5_auc_points": 0,
+  "worst_target_delta_auc_points_vs_b0": -1.127782681180737
+}
