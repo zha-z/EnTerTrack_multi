@@ -21,6 +21,11 @@ from lib.train.plain_collaboration_freeze import (
     assert_plain_collaboration_optimizer_membership,
     plain_collaboration_training_enabled,
 )
+from lib.train.target_prompt_collaboration_freeze import (
+    apply_target_prompt_collaboration_freeze,
+    assert_target_prompt_optimizer_membership,
+    target_prompt_collaboration_training_enabled,
+)
 from lib.train.pcum_freeze import (
     apply_pcum_ranking_freeze,
     assert_optimizer_has_only_pcum_params,
@@ -454,7 +459,10 @@ def build_dataloaders_moe(cfg, settings):         # moe tracking的dataloader
 
 def get_optimizer_scheduler(net, cfg):
     target_net = net.module if hasattr(net, "module") else net
-    if plain_collaboration_training_enabled(cfg):
+    if target_prompt_collaboration_training_enabled(cfg):
+        apply_target_prompt_collaboration_freeze(
+            net, cfg, verbose=is_main_process())
+    elif plain_collaboration_training_enabled(cfg):
         apply_plain_collaboration_freeze(
             net, cfg, verbose=is_main_process())
     elif c3r_training_enabled(cfg):
@@ -473,7 +481,8 @@ def get_optimizer_scheduler(net, cfg):
             print("FREEZE_BACKBONE enabled: backbone parameters are frozen.")
     if (getattr(cfg.TRAIN, "FREEZE_HEAD", False)
             and not c3r_training_enabled(cfg)
-            and not plain_collaboration_training_enabled(cfg)):
+            and not plain_collaboration_training_enabled(cfg)
+            and not target_prompt_collaboration_training_enabled(cfg)):
         for name, parameter in target_net.named_parameters():
             if not name.startswith(("backbone.", "pcum.")):
                 parameter.requires_grad = False
@@ -507,7 +516,8 @@ def get_optimizer_scheduler(net, cfg):
                 print(n)
     else:
         if (not c3r_training_enabled(cfg)
-                and not plain_collaboration_training_enabled(cfg)):
+                and not plain_collaboration_training_enabled(cfg)
+                and not target_prompt_collaboration_training_enabled(cfg)):
             assert_optimizer_has_only_pcum_params(net, cfg)
         param_dicts = build_optimizer_param_groups(
             net, cfg, verbose=is_main_process())
@@ -521,6 +531,8 @@ def get_optimizer_scheduler(net, cfg):
         assert_c3r_optimizer_membership(net, optimizer)
     if plain_collaboration_training_enabled(cfg):
         assert_plain_collaboration_optimizer_membership(net, optimizer)
+    if target_prompt_collaboration_training_enabled(cfg):
+        assert_target_prompt_optimizer_membership(net, optimizer)
     if cfg.TRAIN.SCHEDULER.TYPE == 'step':
         lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, cfg.TRAIN.LR_DROP_EPOCH)
     elif cfg.TRAIN.SCHEDULER.TYPE == "Mstep":

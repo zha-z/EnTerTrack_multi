@@ -14,6 +14,8 @@ from ...utils.ce_utils import generate_mask_cond, adjust_keep_rate, adjust_tempe
 from lib.models.entertrack.pcum import PromptConsistencyLoss, build_pseudo_remote_prompts
 from lib.models.entertrack.c3r import CommunicationPerturbation, gate_ranking_loss
 from .plain_collaboration import forward_plain_collaboration
+from .target_prompt_collaboration import (
+    forward_target_prompt_collaboration)
 
 
 class EnTeRTrackActorThreeMDOT(BaseActor):
@@ -528,6 +530,15 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
             and self._num_views(data) >= 3
         )
 
+    def _use_target_prompt_collaboration(self, data):
+        return (
+            self._get_cfg_value(
+                "MODEL.TARGET_PROMPT_COLLABORATION.ENABLED", False)
+            and self._get_cfg_value(
+                "TRAIN.TARGET_PROMPT_COLLABORATION.ENABLED", False)
+            and self._num_views(data) >= 3
+        )
+
     def _use_c3r(self, data):
         return (
             self._get_cfg_value("MODEL.C3R.ENABLED", False)
@@ -611,6 +622,7 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
             raise RuntimeError("B0-ABC-Plain CENTER bbox shape is invalid")
 
         collaboration = output.get("plain_collaboration", None)
+        target_prompt = output.get("target_prompt_collaboration", None)
         status = {
             "Plain/search_tokens": float(expected_search),
             "Plain/template_tokens": float(expected_template),
@@ -621,7 +633,8 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
             "Plain/bbox_dim": float(pred_boxes.shape[-1]),
             "Plain/pcum_present": 0.0,
             "Plain/c3r_present": 0.0,
-            "Plain/remote_state_present": float(collaboration is not None),
+            "Plain/remote_state_present": float(
+                collaboration is not None or target_prompt is not None),
             "Plain/pruning_present": 0.0,
         }
         if collaboration is not None:
@@ -640,6 +653,26 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
                     collaboration["relative_residual_norm"].detach().item()),
                 "V1/residual_scale": float(
                     collaboration["residual_scale"].detach().item()),
+            })
+        if target_prompt is not None:
+            if getattr(network, "target_prompt_collaboration", None) is None:
+                raise RuntimeError("E3 output exists without the V2 adapter")
+            weights = target_prompt.get("remote_weights", None)
+            if not torch.is_tensor(weights) or weights.shape[1] != 2:
+                raise RuntimeError("E3 must provide two remote weights per receiver")
+            if int(output.get("target_prompt_k", -1)) != 8:
+                raise RuntimeError("E3 requires fixed prompt K=8")
+            status.update({
+                "E3/prompt_k": 8.0,
+                "E3/used_remote": float(target_prompt["used_remote"]),
+                "E3/valid_remote_count": float(
+                    target_prompt["valid_remote_count"].float().mean().item()),
+                "E3/residual_norm": float(
+                    target_prompt["residual_norm"].detach().item()),
+                "E3/relative_residual_norm": float(
+                    target_prompt["relative_residual_norm"].detach().item()),
+                "E3/residual_scale": float(
+                    target_prompt["residual_scale"].detach().item()),
             })
         return status
 
@@ -1019,6 +1052,8 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
         """
         单机 forward：只取第 0 个视角。
         """
+        if self._use_target_prompt_collaboration(data):
+            return forward_target_prompt_collaboration(self, net, data)
         if self._use_plain_collaboration(data):
             return forward_plain_collaboration(self, net, data)
         if self._use_c3r(data):

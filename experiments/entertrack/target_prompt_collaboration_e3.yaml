@@ -1,0 +1,75 @@
+BASE_CONFIG: b0_abc_plain_4gpu
+EXPERIMENT_NAME: B0-ABC-Plain-Target-Prompt-Collaboration-E3
+MODEL_ROLE: target_prompt_collaboration_e3
+B0_CHECKPOINT: output/diagnostics/b0_abc_plain/run_20260818_seed42_4gpu_r001/checkpoints/train/entertrack/b0_abc_plain_4gpu/EnTeRTrack_ep0025.pth.tar
+
+MODEL:
+  PRETRAIN_FILE: ""
+  USE_SEARCH_PROMPT: false
+  PCUM:
+    ENABLED: false
+  C3R:
+    ENABLED: false
+  FCVC:
+    ENABLED: false
+  TEMPORAL_GATE:
+    ENABLED: false
+  PLAIN_COLLABORATION:
+    ENABLED: false
+  TARGET_PROMPT_COLLABORATION:
+    ENABLED: true
+    TOKEN_DIM: 192
+    PROMPT_K: 8
+    NUM_HEADS: 3
+    AGGREGATION: mean
+    RESIDUAL_INIT_SCALE: 0.01
+    RESIDUAL_SCALE_MAX: 0.25
+    RELATIVE_NORM_CAP: 0.25
+  BACKBONE:
+    TYPE: vit_tiny_patch16_224_half
+    PRUNING_ENABLED: false
+    DYNAMIC_THRESHOLD_ENABLED: false
+    TOKEN_COMPENSATION_ENABLED: false
+    CE_LOC: []
+    CE_KEEP_RATIO: []
+
+TRAIN:
+  MULTIVIEW:
+    ENABLED: true
+    FLAT_BASELINE: true
+    REQUIRE_ALL_VIEWS_VISIBLE: true
+    CANONICAL_VIEW_ORDER: true
+    DIAGNOSTICS_ENABLED: true
+  PCUM:
+    USE_REAL_MULTIVIEW: false
+    USE_PSEUDO_REMOTE: false
+  C3R:
+    ENABLED: false
+  FCVC:
+    ENABLED: false
+  TEMPORAL_GATE:
+    ENABLED: false
+  PLAIN_COLLABORATION:
+    ENABLED: false
+  TARGET_PROMPT_COLLABORATION:
+    ENABLED: true
+    FREEZE_LOCAL: true
+    DETACH_REMOTE: true
+    LR: 0.00008
+
+TEST:
+  SAVE_DIR: output/diagnostics/target_prompt_collaboration_e3
+  CHECKPOINT_NAME: target_prompt_collaboration_e3
+  PLAIN_COLLABORATION:
+    ENABLED: false
+  TARGET_PROMPT_COLLABORATION:
+    ENABLED: true
+    SAVE_DIAGNOSTICS: true
+    SAFE_COMMIT: true
+  PCUM:
+    USE_REMOTE: false
+    REMOTE_STATE_SOURCE: none
+  C3R:
+    ENABLED: false
+  COOP:
+    ENABLED: false

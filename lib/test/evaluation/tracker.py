@@ -22,6 +22,8 @@ from lib.test.utils.pcum_remote_state import (
     uses_gt_visibility,
     validate_remote_state_source,
 )
+from lib.test.evaluation.target_prompt_collaboration import (
+    run_target_prompt_frame)
 from lib.test.tracker.entertrack import validate_reliability_selector
 from lib.models.entertrack.pcum import validate_remote_aggregation
 from lib.test.evaluation.run_id import (
@@ -811,6 +813,18 @@ class Tracker:
             raise ValueError(
                 "Three-view runner requires canonical A/B/C sequence order")
         target_id = target_ids[0]
+        target_enabled_by_tracker = tuple(bool(getattr(
+            item, "target_prompt_collaboration_enabled", False)) for item in (
+                tracker, tracker2, tracker3))
+        if any(target_enabled_by_tracker) and not all(target_enabled_by_tracker):
+            raise ValueError(
+                "Target Prompt E3 enablement must match across all views")
+        target_prompt_remote_enabled = all(target_enabled_by_tracker)
+        target_prompt_test_cfg = getattr(
+            tracker.cfg.TEST, "TARGET_PROMPT_COLLABORATION", None)
+        target_prompt_save_diagnostics = bool(
+            target_prompt_remote_enabled
+            and getattr(target_prompt_test_cfg, "SAVE_DIAGNOSTICS", True))
         plain_enabled_by_tracker = tuple(bool(getattr(
             item, "plain_collaboration_enabled", False)) for item in (
                 tracker, tracker2, tracker3))
@@ -931,6 +945,38 @@ class Tracker:
                     str(plain_save_sender_counterfactual).lower(),
                     str(plain_save_target_consistency).lower(),
                     target_id))
+        if target_prompt_remote_enabled:
+            if plain_remote_enabled:
+                raise RuntimeError("E3 and V1 inference are mutually exclusive")
+            if not all(
+                    bool(getattr(item, "target_prompt_collaboration_safe_commit", False))
+                    for item in (tracker, tracker2, tracker3)):
+                raise RuntimeError("E3 requires SAFE_COMMIT on all views")
+            required = (
+                "target_prompt_local_candidate",
+                "target_prompt_candidate",
+                "target_prompt_finalize_frame")
+            for active_tracker in (tracker, tracker2, tracker3):
+                missing = [name for name in required if not hasattr(active_tracker, name)]
+                if missing:
+                    raise RuntimeError(
+                        "E3 tracker methods are missing: {}".format(missing))
+            frame_counts = tuple(len(seq.frames) for seq in sequences)
+            if len(set(frame_counts)) != 1:
+                raise ValueError("E3 requires equal A/B/C frame counts")
+            for frame_index in range(frame_counts[0]):
+                frame_keys = tuple(os.path.basename(
+                    seq.frames[frame_index]) for seq in sequences)
+                if len(set(frame_keys)) != 1:
+                    raise ValueError(
+                        "E3 frame paths are not synchronized at {}: {}".format(
+                            frame_index, frame_keys))
+            if target_prompt_save_diagnostics:
+                output_a["target_prompt_collaboration_diagnostics"] = []
+                output_b["target_prompt_collaboration_diagnostics"] = []
+                output_c["target_prompt_collaboration_diagnostics"] = []
+            print("[Target Prompt E3 inference] K=8 senders=2 "
+                  "safe_commit=true uses_gt=false target={}".format(target_id))
         c3r_model_enabled = bool(getattr(
             getattr(tracker.cfg.MODEL, "C3R", None), "ENABLED", False))
         c3r_test_enabled = bool(getattr(
@@ -1070,7 +1116,8 @@ class Tracker:
                     "plain_collaboration_diagnostics",
                     "plain_collaboration_counterfactual",
                     "plain_collaboration_sender_counterfactual",
-                    "plain_collaboration_target_prototypes")
+                    "plain_collaboration_target_prototypes",
+                    "target_prompt_collaboration_diagnostics")
             )
 
         def _to_float(x):
@@ -1981,7 +2028,32 @@ class Tracker:
                 and getattr(tracker3, "fcvc_enabled", False)
             )
 
-            if plain_remote_enabled:
+            if target_prompt_remote_enabled:
+                if fcvc_enabled or c3r_remote_enabled:
+                    raise RuntimeError("E3 must be the only cross-view mechanism")
+                e3_results = run_target_prompt_frame(
+                    (tracker, tracker2, tracker3), (image_a, image_b, image_c),
+                    frame_num, target_id)
+                result_a, result_b, result_c = e3_results
+                out_a = result_a["output"]
+                out_b = result_b["output"]
+                out_c = result_c["output"]
+                max_score_a = result_a["max_score"]
+                max_score_b = result_b["max_score"]
+                max_score_c = result_c["max_score"]
+                response_APCE_a = result_a["apce"]
+                response_APCE_b = result_b["apce"]
+                response_APCE_c = result_c["apce"]
+                time_a = result_a["time"]
+                time_b = result_b["time"]
+                time_c = result_c["time"]
+                score_a_val = _to_float(max_score_a)
+                score_b_val = _to_float(max_score_b)
+                score_c_val = _to_float(max_score_c)
+                apce_a_val = _to_float(response_APCE_a)
+                apce_b_val = _to_float(response_APCE_b)
+                apce_c_val = _to_float(response_APCE_c)
+            elif plain_remote_enabled:
                 local_forward_counts_before = tuple(int(getattr(
                     item, "_plain_collaboration_local_forward_count", 0))
                     for item in (tracker, tracker2, tracker3))

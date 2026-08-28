@@ -1,0 +1,24 @@
+Target Prompt E3 strict trainable audit
+=======================================
+trainable_tensor_count=9
+trainable_parameter_count=148993
+optimizer_parameter_count=148993
+optimizer_group_names=target_prompt_collaboration
+optimizer_lr=0.00008
+extractor_parameter_count=0
+frozen_local_parameter_count=5409477
+backbone_trainable=false
+center_head_trainable=false
+plain_v1_present=false
+pcum_present=false
+c3r_present=false
+
+target_prompt_collaboration.residual_logit
+target_prompt_collaboration.local_norm.weight
+target_prompt_collaboration.local_norm.bias
+target_prompt_collaboration.remote_norm.weight
+target_prompt_collaboration.remote_norm.bias
+target_prompt_collaboration.cross_attention.in_proj_weight
+target_prompt_collaboration.cross_attention.in_proj_bias
+target_prompt_collaboration.cross_attention.out_proj.weight
+target_prompt_collaboration.cross_attention.out_proj.bias

@@ -12,6 +12,8 @@ except ModuleNotFoundError:
 from PIL import Image, ImageDraw
 
 from lib.models.entertrack import build_entertrack
+from lib.models.entertrack.target_prompt_collaboration_checkpoint import (
+    load_target_prompt_collaboration_initialization)
 from lib.test.tracker.basetracker import BaseTracker
 from lib.test.tracker.vis_utils import gen_visualization
 from lib.test.tracker.data_utils import Preprocessor
@@ -591,6 +593,43 @@ class EnTeRTrack(BaseTracker):
             if int(self.network.feat_len_s) != 256:
                 raise RuntimeError(
                     "Plain Collaboration V1 requires 256 search tokens")
+        target_model_enabled = bool(getattr(getattr(
+            self.cfg.MODEL, "TARGET_PROMPT_COLLABORATION", None),
+            "ENABLED", False))
+        target_test_cfg = getattr(
+            self.cfg.TEST, "TARGET_PROMPT_COLLABORATION", None)
+        target_test_enabled = bool(getattr(
+            target_test_cfg, "ENABLED", False))
+        if target_model_enabled != target_test_enabled:
+            raise RuntimeError("E3 MODEL/TEST enable flags must match")
+        self.target_prompt_collaboration_enabled = bool(
+            target_model_enabled and target_test_enabled)
+        self.target_prompt_collaboration_safe_commit = bool(getattr(
+            target_test_cfg, "SAFE_COMMIT", True))
+        self._target_prompt_local_forward_count = 0
+        if (self.target_prompt_collaboration_enabled
+                and not self.target_prompt_collaboration_safe_commit):
+            raise RuntimeError("E3 inference requires SAFE_COMMIT=true")
+        if (self.target_prompt_collaboration_enabled
+                and self.plain_collaboration_enabled):
+            raise RuntimeError("E3 and V1 inference are mutually exclusive")
+        if self.target_prompt_collaboration_enabled:
+            if (self.network.target_prompt_collaboration is None
+                    or self.network.target_prompt_extractor is None):
+                raise RuntimeError("E3 inference requires adapter and extractor")
+            if any((self.network.plain_collaboration is not None,
+                    self.network.pcum is not None,
+                    self.network.c3r is not None,
+                    self.network.search_prompt_gate is not None)):
+                raise RuntimeError(
+                    "E3 inference is exclusive with V1/PCUM/C3R/search prompt")
+            if int(self.network.feat_len_s) != 256:
+                raise RuntimeError("E3 requires 256 local search tokens")
+            if int(self.network.target_prompt_extractor.prompt_k) != 8:
+                raise RuntimeError("E3 requires fixed prompt K=8")
+            if sum(parameter.numel() for parameter in
+                   self.network.target_prompt_extractor.parameters()) != 0:
+                raise RuntimeError("E3 extractor must have zero parameters")
         self.fcvc_enabled = bool(
             str(getattr(getattr(self.cfg.MODEL, "COLLABORATION", None), "TYPE", "")).lower() == "fcvc"
             and bool(getattr(getattr(self.cfg.MODEL, "FCVC", None), "ENABLED", False))
@@ -736,6 +775,11 @@ class EnTeRTrack(BaseTracker):
             network.load_state_dict(state_dict, strict=True)
 
         except RuntimeError:
+            if getattr(network, "target_prompt_collaboration", None) is not None:
+                load_target_prompt_collaboration_initialization(
+                    network, checkpoint_path)
+                print("Load B0 core with fresh Target Prompt E3 adapter")
+                return
             if (getattr(network, "c3r", None) is not None
                     or getattr(network, "plain_collaboration", None) is not None):
                 raise
@@ -3594,6 +3638,10 @@ class EnTeRTrack(BaseTracker):
             dim=-1
         )
 
+
+from lib.test.tracker.target_prompt_collaboration import (  # noqa: E402
+    install_target_prompt_runtime)
+install_target_prompt_runtime(EnTeRTrack)
 
 def get_tracker_class():
     return EnTeRTrack

@@ -1,0 +1,30 @@
+{
+  "branch": "feature/pcum-cross-layer-arp",
+  "implementation_commit": "COMMIT_CONTAINING_THIS_FILE",
+  "preregistration_commit": "5fd1b087235399f24916eacc6298f8f17c5fd502",
+  "date": "2026-08-28",
+  "dataset_scope": "threemdot_val shortest complete target, two-frame smoke only",
+  "selected_target": "md3048",
+  "selected_sequences": ["md3048-1", "md3048-2", "md3048-3"],
+  "source_frame_counts": [530, 530, 530],
+  "smoke_frame_count": 2,
+  "runtime_uses_gt": false,
+  "official_test_run": false,
+  "long_training_run": false,
+  "gpu": "physical GPU 0, NVIDIA GeForce RTX 4090",
+  "python": "/home/user/.conda/envs/zjy/bin/python",
+  "b0_checkpoint": "output/diagnostics/b0_abc_plain/run_20260818_seed42_4gpu_r001/checkpoints/train/entertrack/b0_abc_plain_4gpu/EnTeRTrack_ep0025.pth.tar",
+  "b0_checkpoint_epoch": 25,
+  "b0_checkpoint_sha256": "363fb06b05e4f0591ca1efca5b31ad38c7f5e0865048bb546dcd28dd0463edd3",
+  "unit_tests": {
+    "command": "/home/user/.conda/envs/zjy/bin/python -m unittest tests.test_target_prompt_collaboration tests.test_plain_collaboration -v",
+    "passed": 42,
+    "failed": 0
+  },
+  "real_checkpoint_smoke_pass": true,
+  "trainable_parameter_count": 148993,
+  "extractor_parameter_count": 0,
+  "payload_fp32_bytes_per_sender": 6144,
+  "payload_fp16_bytes_per_sender": 3072,
+  "payload_reduction_vs_v1": 32
+}

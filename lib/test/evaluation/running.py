@@ -16,6 +16,10 @@ from lib.test.tracker.motion_state import (
 from lib.test.tracker.mcr_redetection import save_mcr_diagnostics
 import torch
 from lib.test.utils.c3r_inference import C3R_DIAGNOSTIC_COLUMNS
+from lib.test.utils.target_prompt_diagnostics import (
+    save_target_prompt_diagnostics,
+    target_prompt_diagnostic_file,
+)
 
 
 PLAIN_COLLABORATION_DIAGNOSTIC_COLUMNS = (
@@ -341,6 +345,10 @@ def _save_tracker_output(seq: Sequence, tracker: Tracker, output: dict):
                 '{}_plain_collaboration_target_prototypes.npz'.format(
                     base_results_path))
             save_plain_collaboration_target_prototypes(prototype_file, data)
+        if key == 'target_prompt_collaboration_diagnostics':
+            diagnostics_file = target_prompt_diagnostic_file(base_results_path)
+            save_target_prompt_diagnostics(diagnostics_file, data)
+
 
         elif key == 'time':
             if isinstance(data[0], dict):
@@ -748,6 +756,19 @@ def run_three_multi_sequence(seq_a: Sequence, seq_b: Sequence ,seq_c: Sequence, 
                 tracker._plain_collaboration_enabled = False
         return tracker._plain_collaboration_enabled
 
+    def _target_prompt_diagnostics_enabled():
+        if not hasattr(tracker, "_save_target_prompt_diagnostics"):
+            try:
+                params = tracker.get_parameters()
+                target_cfg = getattr(
+                    params.cfg.TEST, "TARGET_PROMPT_COLLABORATION", None)
+                tracker._save_target_prompt_diagnostics = bool(
+                    getattr(target_cfg, "ENABLED", False)
+                    and getattr(target_cfg, "SAVE_DIAGNOSTICS", True))
+            except Exception:
+                tracker._save_target_prompt_diagnostics = False
+        return tracker._save_target_prompt_diagnostics
+
     def _plain_collaboration_diagnostics_enabled():
         if not hasattr(tracker, "_save_plain_collaboration_diagnostics"):
             try:
@@ -943,6 +964,13 @@ def run_three_multi_sequence(seq_a: Sequence, seq_b: Sequence ,seq_c: Sequence, 
             _plain_collaboration_sender_counterfactual_enabled())
         need_plain_target_consistency = (
             _plain_collaboration_target_consistency_enabled())
+        need_target_prompt_diagnostics = _target_prompt_diagnostics_enabled()
+        if need_target_prompt_diagnostics:
+            for sequence in (seq_a, seq_b, seq_c):
+                base_path = os.path.join(tracker.results_dir, sequence.name)
+                if not os.path.isfile(target_prompt_diagnostic_file(base_path)):
+                    return False
+
         if (need_decision_log or need_frame_diagnostics
                 or need_motion_diagnostics or need_c3r_instrumentation
                 or need_plain_diagnostics or need_plain_counterfactual
