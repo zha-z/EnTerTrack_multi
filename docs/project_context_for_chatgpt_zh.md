@@ -20,10 +20,6 @@
 
 本项目以 EnTeR-Track/OSTrack-Tiny 单目标跟踪器为本地基础，在 Three-MDOT 同一目标的 A/B/C 三个同步无人机视角之间引入视觉协作，使每个接收端在没有 GT、没有未来帧、没有 oracle 可见性信息的条件下利用其他无人机的信息，同时尽量保持轻量、低带宽、可部署，并避免错误远端信息污染本地闭环状态。
 
-## 3. 最终目标
-
-### 3.1 算法目标
-
 ### 2.1 最新冻结实验状态（2026-08-28）
 
 最新受控结果见 [`docs/results/target_prompt_collaboration_e3_ep25_test_20260828/REPORT_ZH.md`](results/target_prompt_collaboration_e3_ep25_test_20260828/REPORT_ZH.md)。同一 Three-MDOT test、同一 OSTrack `calc_seq_err_robust`、105 个 A/B/C 独立序列宏平均口径下：
@@ -33,6 +29,10 @@
 - E3/K8 target semantic prompt ep25 AUC 48.7651。
 
 E3 相对 B0 为 -0.1813 AUC point，相对 E1 为 +0.7622 point。E3 的 no-GT、Safe Commit、remote-active 和 32x payload reduction 检查通过，但预注册主门槛 `B0 +0.30 point` 失败，因此结论是 **E3 FAIL / stop test-side tuning**。后续只能回到 inner-val/inner-dev 做 prediction-only utility 诊断，不能依据该 test 调 K、残差强度、阈值或逐视角权重。
+
+## 3. 最终目标
+
+### 3.1 算法目标
 
 
 - 提升 Drone A/B/C 各单视角的 AUC、Precision 和 Norm Precision，而不只提高离线 fused 指标。

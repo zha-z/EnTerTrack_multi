@@ -1,6 +1,6 @@
 {
   "branch": "feature/pcum-cross-layer-arp",
-  "implementation_commit": "COMMIT_CONTAINING_THIS_FILE",
+  "implementation_commit": "d630d6402b239bb463757d6964a3194c88bdfffc",
   "preregistration_commit": "5fd1b087235399f24916eacc6298f8f17c5fd502",
   "date": "2026-08-28",
   "dataset_scope": "threemdot_val shortest complete target, two-frame smoke only",
