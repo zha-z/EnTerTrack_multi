@@ -1,0 +1,21 @@
+{
+  "dataset": "threemdot_val",
+  "harmful_threshold": -0.02,
+  "helpful_threshold": 0.02,
+  "local_auc": 0.6488564254894907,
+  "oof_policy_feature_group": "P4",
+  "oof_policy_threshold": 0.5,
+  "oof_selection_counts": {
+    "local": 13899,
+    "sender0_only": 88,
+    "sender1_only": 125
+  },
+  "oracle_uses_gt_posthoc": true,
+  "phase": "posthoc_gt_join_and_target_loto",
+  "prediction_branch_sha256_verified": "09d74a9f4060654b5843e8d3dd4355b0b8e669d71556bb49ea7c80b08f77d9c3",
+  "prediction_prompt_feature_sha256_verified": "99ba5e643eceee40eb8e48769df66c914830f6104d5a4388ddb43a876a6048c3",
+  "receiver_frame_groups": 14112,
+  "remote_help_available_ratio": 0.12232664841263968,
+  "uses_gt_at_runtime": false,
+  "valid_receiver_frames": 13513
+}
