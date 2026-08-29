@@ -32,7 +32,7 @@ E3-D1 只改变训练期输入分布：在固定比例的同步 A/B/C triplet �
 
 ```text
 search_images: [V=3, B, C=3, H=256, W=256]
-search_anno:   [V=3, B, 4]，crop-space xywh pixels
+search_anno:   [V=3, B, 4]，crop-space normalized xywh `[0,1]`
 ```
 
 仅当 `network.training=true` 且 D1 显式启用时：
@@ -40,7 +40,7 @@ search_anno:   [V=3, B, 4]，crop-space xywh pixels
 1. 要求 `V=3`、formal local batch `B=2` 且 B 为偶数；
 2. 在本地 batch 的 B 个 synchronized triplet 中，用当前 seeded PyTorch RNG 随机 permutation，选择恰好 `B/2` 个 triplet；
 3. 对每个被选 triplet，以均匀分布从 A/B/C 选择 exactly one weak view；
-4. 读取该 view 的 crop-space target bbox；按 `floor(x,y)` / `ceil(x+w,y+h)` rasterize，并裁剪到 search 边界；
+4. 读取该 view 的 normalized crop-space target bbox，先分别乘以 `W/H` 转换成 pixel coordinates，再按 `floor(x,y)` / `ceil(x+w,y+h)` rasterize，并裁剪到 search 边界；
 5. 将该 bbox 的全部 RGB pixels 填为归一化空间常数 `0.0`；
 6. bbox supervision、template、另外两个 search view、attention mask和所有 metadata保持不变。
 
@@ -115,7 +115,7 @@ validation 应记录 `E3D1/applied=0`、selected=0。日志只用于协议核验
 4. 每 selected triplet恰好一个 weak view；
 5. 非 selected triplet和另外两个 view逐元素不变；
 6. 只改变 bbox 内 search pixels，template与annotation不变；
-7. fixed fill=0、bbox clipping与finite检查正确；
+7. normalized bbox 到 pixel bbox 的换算、fixed fill=0、clipping与finite检查正确；
 8. E3 K=8、remote mapping与CENTER output shape不变；
 9. forward/backward/loss finite；
 10. optimizer仍仅包含 E3 adapter 148,993 parameters；
