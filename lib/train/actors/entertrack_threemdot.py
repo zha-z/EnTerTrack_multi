@@ -16,6 +16,7 @@ from lib.models.entertrack.c3r import CommunicationPerturbation, gate_ranking_lo
 from .plain_collaboration import forward_plain_collaboration
 from .target_prompt_collaboration import (
     forward_target_prompt_collaboration)
+from lib.train.target_prompt_asymmetric_degradation import degradation_status
 
 
 class EnTeRTrackActorThreeMDOT(BaseActor):
@@ -674,6 +675,9 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
                 "E3/residual_scale": float(
                     target_prompt["residual_scale"].detach().item()),
             })
+        degradation = output.get("e3_d1_degradation", None)
+        if degradation is not None:
+            status.update(degradation_status(degradation))
         return status
 
     def _multiview_backbone_diagnostics(self, output, data):

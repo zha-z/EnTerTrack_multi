@@ -3,6 +3,8 @@
 import torch
 
 from .plain_collaboration import validate_synchronized_abc_metadata
+from lib.train.target_prompt_asymmetric_degradation import (
+    apply_e3_d1_asymmetric_degradation)
 
 
 def build_flat_remote_prompts(prompts, num_views=3):
@@ -53,9 +55,11 @@ def forward_target_prompt_collaboration(actor, net, data):
     num_views = min(actor._num_views(data), 3)
     if num_views != 3:
         raise ValueError("E3 requires exactly three synchronized views")
+    effective_data, degradation_audit = apply_e3_d1_asymmetric_degradation(
+        data, actor.cfg, training=bool(target.training))
     with torch.no_grad():
         local_output = actor._forward_flat_views(
-            target, data, num_views, remote_prompts=None,
+            target, effective_data, num_views, remote_prompts=None,
             model_training=False)
         feature = local_output["backbone_feat"].detach()
         search_tokens = feature[:, -target.feat_len_s:]
@@ -83,6 +87,7 @@ def forward_target_prompt_collaboration(actor, net, data):
     output["pcum_flat_multiview"] = True
     output["num_views"] = num_views
     output["target_prompt_k"] = int(extractor.prompt_k)
+    output["e3_d1_degradation"] = degradation_audit
     output["target_prompt_local_output"] = {
         key: value.detach()
         for key, value in local_output.items()

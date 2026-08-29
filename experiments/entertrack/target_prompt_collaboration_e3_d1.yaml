@@ -1,0 +1,16 @@
+BASE_CONFIG: target_prompt_collaboration_e3
+EXPERIMENT_NAME: B0-ABC-Plain-Target-Prompt-Collaboration-E3-D1
+MODEL_ROLE: target_prompt_collaboration_e3_d1
+
+TRAIN:
+  TARGET_PROMPT_COLLABORATION:
+    ASYMMETRIC_DEGRADATION:
+      ENABLED: true
+      TRIPLET_RATIO: 0.50
+      WEAK_VIEWS_PER_TRIPLET: 1
+      OCCLUSION_BOX_SCALE: 1.00
+      FILL_VALUE_NORMALIZED: 0.0
+
+TEST:
+  SAVE_DIR: output/diagnostics/target_prompt_collaboration_e3_d1
+  CHECKPOINT_NAME: target_prompt_collaboration_e3_d1
