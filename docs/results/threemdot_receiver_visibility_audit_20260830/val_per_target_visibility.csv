@@ -1,0 +1,6 @@
+split,target,A_annotation_frames,B_annotation_frames,C_annotation_frames,synchronized_triplets,discarded_unsynchronized_tail_frames,common_visible_triplets,A_receiver_visible_frames,B_receiver_visible_frames,C_receiver_visible_frames,receiver_visible_total,A_natural_asymmetric_frames,A_natural_asymmetric_percentage,B_natural_asymmetric_frames,B_natural_asymmetric_percentage,C_natural_asymmetric_frames,C_natural_asymmetric_percentage,natural_asymmetric_receiver_frames,natural_asymmetric_percentage
+val,md3016,970,970,970,970,0,805,844,929,970,2743,39,4.620853,124,13.347686,165,17.010309,328,11.957711
+val,md3027,1136,1136,1136,1136,0,1116,1116,1136,1136,3388,0,0.000000,20,1.760563,20,1.760563,40,1.180638
+val,md3034,909,909,909,909,0,587,587,909,909,2405,0,0.000000,322,35.423542,322,35.423542,644,26.777547
+val,md3048,530,530,530,530,0,463,530,530,463,1523,67,12.641509,67,12.641509,0,0.000000,134,8.798424
+val,md3055,1159,1159,1159,1159,0,1136,1159,1159,1136,3454,23,1.984469,23,1.984469,0,0.000000,46,1.331789

@@ -1,0 +1,9 @@
+split,pattern_ABC,visible_view_count,frame_count,percentage
+train,000,0,355,2.199777
+train,001,1,221,1.369439
+train,010,1,380,2.354691
+train,011,2,544,3.370926
+train,100,1,292,1.809394
+train,101,2,1723,10.676664
+train,110,2,559,3.463874
+train,111,3,12064,74.755236

@@ -1,0 +1,5 @@
+split,receiver,receiver_frame_count,R2_two_visible_senders_count,R2_two_visible_senders_percentage,R1_one_visible_sender_count,R1_one_visible_sender_percentage,R0_zero_visible_senders_count,R0_zero_visible_senders_percentage,natural_asymmetric_count,natural_asymmetric_percentage,any_sender_occlusion_count,any_sender_occlusion_percentage,any_sender_out_of_view_count,any_sender_out_of_view_percentage,any_sender_invalid_bbox_count,any_sender_invalid_bbox_percentage
+val,A,4236,4107,96.954674,129,3.045326,0,0.000000,129,3.045326,129,3.045326,0,0.000000,0,0.000000
+val,B,4663,4107,88.076346,556,11.923654,0,0.000000,556,11.923654,556,11.923654,0,0.000000,0,0.000000
+val,C,4614,4107,89.011704,505,10.944950,2,0.043346,507,10.988296,507,10.988296,0,0.000000,0,0.000000
+val,overall,13513,12321,91.178865,1190,8.806335,2,0.014801,1192,8.821135,1192,8.821135,0,0.000000,0,0.000000

@@ -1,0 +1,5 @@
+split,receiver,receiver_frame_count,R2_two_visible_senders_count,R2_two_visible_senders_percentage,R1_one_visible_sender_count,R1_one_visible_sender_percentage,R0_zero_visible_senders_count,R0_zero_visible_senders_percentage,natural_asymmetric_count,natural_asymmetric_percentage,any_sender_occlusion_count,any_sender_occlusion_percentage,any_sender_out_of_view_count,any_sender_out_of_view_percentage,any_sender_invalid_bbox_count,any_sender_invalid_bbox_percentage
+train,A,14638,12064,82.415631,2282,15.589561,292,1.994808,2574,17.584369,2574,17.584369,0,0.000000,0,0.000000
+train,B,13547,12064,89.052927,1103,8.142024,380,2.805049,1483,10.947073,1483,10.947073,0,0.000000,0,0.000000
+train,C,14552,12064,82.902694,2267,15.578615,221,1.518692,2488,17.097306,2488,17.097306,0,0.000000,0,0.000000
+train,overall,42737,36192,84.685401,5652,13.225074,893,2.089524,6545,15.314599,6545,15.314599,0,0.000000,0,0.000000

@@ -1,0 +1,9 @@
+split,pattern_ABC,visible_view_count,frame_count,percentage
+val,000,0,0,0.000000
+val,001,1,2,0.042517
+val,010,1,0,0.000000
+val,011,2,466,9.906463
+val,100,1,0,0.000000
+val,101,2,39,0.829082
+val,110,2,90,1.913265
+val,111,3,4107,87.308673

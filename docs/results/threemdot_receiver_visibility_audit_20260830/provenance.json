@@ -1,0 +1,139 @@
+{
+  "artifacts": {
+    "COMMANDS_ZH.md": {
+      "sha256": "49d038c19154c1a8263ab16d39e74211114581ed397cce2371f944153d94d038"
+    },
+    "PROTOCOL_ZH.md": {
+      "sha256": "a3e87e3630e44f67c8dffbc6ca6c2d126edc0e33b2cd9a74613b3407e11ef07c"
+    },
+    "REPORT_ZH.md": {
+      "sha256": "270e1946e535ec464588c7d92448acb4e67914233ace63deda2facd7cdfa6767"
+    },
+    "audit_visibility.py": {
+      "sha256": "d1fa9f1ad94ade21e62b74cb89c5a293a548859fd81be71f3ca0b4174b8fb14b"
+    },
+    "coverage_comparison.csv": {
+      "sha256": "7e6bb294ce8349e1dba283145aef10fcb157cd8517106e26aba8e24ac0a55c99"
+    },
+    "train_asymmetric_run_lengths.csv": {
+      "sha256": "f0009a0cd4404ebed5725e59975728c93ec76d4eb68da2b551d4d36af0ad020e"
+    },
+    "train_per_target_visibility.csv": {
+      "sha256": "08220642633373cb09ed1db569fd02303d4e2eaee2aabc60ac503620462cb72b"
+    },
+    "train_receiver_visibility_summary.csv": {
+      "sha256": "766322cca6172e249049a7e581cd928d66eb2c250691c80166d25a212c09749d"
+    },
+    "train_triplet_visibility_patterns.csv": {
+      "sha256": "2ac0ecba0b722896093eae42530b5a29ee1252c1b3e494a774ce33bbf4ff1295"
+    },
+    "train_visibility_levels.csv": {
+      "sha256": "c8c3fe2cd31fc82de714e3f58d2232ad1ce67db00b2c22c9b08d55abbc41a788"
+    },
+    "val_asymmetric_run_lengths.csv": {
+      "sha256": "44c3204222096369fbc9128087f14d65e6b7e486f445f7f2148bf530dbc855e3"
+    },
+    "val_per_target_visibility.csv": {
+      "sha256": "e9ce2ca71dc8152ba263d26723c87d0a9b745bdfcac619a4e9264a47732aa08e"
+    },
+    "val_receiver_visibility_summary.csv": {
+      "sha256": "d51dbf3b003d29d67b4efda24212f2e34c4cc96b9ac2747be127404f9b2f8a7d"
+    },
+    "val_triplet_visibility_patterns.csv": {
+      "sha256": "8f306dbff14c86bb65b5f2c8ad046fec780fedaed5026f2f40f30c73e12f3781"
+    },
+    "val_visibility_levels.csv": {
+      "sha256": "2a31b4ebffcf5103e04c235d7e59583d81c6adfa1a09cc9a6e30f757266b0f8f"
+    },
+    "visibility_schema_audit.md": {
+      "sha256": "acb0f2dbf3399a8558fce3bc1fbc350ae854e0301fceaf9d2ba3a21333eaae8a"
+    }
+  },
+  "branch": "feature/pcum-cross-layer-arp",
+  "command": "PYTHONPATH=. /home/user/.conda/envs/zjy/bin/python docs/results/threemdot_receiver_visibility_audit_20260830/audit_visibility.py --output-dir docs/results/threemdot_receiver_visibility_audit_20260830",
+  "dataset_root": "/data2/Three-MDOT",
+  "date": "2026-08-30",
+  "model_or_training_code_modified": false,
+  "official_test_accessed": false,
+  "official_test_run": false,
+  "p90_method": "linear interpolation at 0.90*(n-1)",
+  "percentage_unit": "percent_0_to_100",
+  "python": "3.8.20",
+  "source_head": "5b0e6a9b446b08e561c067b52db1bc38b1ec3081",
+  "splits": {
+    "train": {
+      "N_common": 12064,
+      "N_receiver_A": 14638,
+      "N_receiver_B": 13547,
+      "N_receiver_C": 14552,
+      "N_receiver_total": 42737,
+      "annotation_file_count": 207,
+      "annotation_sha256": "3b5499355e0319d70039949ac60291f168c145a694881bbf1beca4d7590cf5e1",
+      "checks": {
+        "binary_occlusion": true,
+        "binary_out_of_view": true,
+        "level_sum_matches_sync": true,
+        "pattern_sum_matches_sync": true,
+        "receiver_state_partition": true,
+        "receiver_total_matches_patterns": true,
+        "run_frames_match_asymmetric": true
+      },
+      "discarded_unsynchronized_tail_frames": 0,
+      "invalid_bbox_count_within_sync": 0,
+      "natural_asymmetric_ratio_pct": "15.314599",
+      "natural_asymmetric_receiver_frames": 6545,
+      "occlusion_values": [
+        0,
+        1
+      ],
+      "out_of_view_values": [
+        0
+      ],
+      "sequence_count": 69,
+      "split_file": "lib/train/data_specs/threemdot/threemdot_train.txt",
+      "split_sha256": "c11863ade304409138cc96814946a12aa3060bec35438e201845c2d4f41b29bc",
+      "synchronized_triplets": 16138,
+      "target_count": 23
+    },
+    "val": {
+      "N_common": 4107,
+      "N_receiver_A": 4236,
+      "N_receiver_B": 4663,
+      "N_receiver_C": 4614,
+      "N_receiver_total": 13513,
+      "annotation_file_count": 45,
+      "annotation_sha256": "27d05e0f1897e6f6b893ca4807d3e83310723fa97440367f87bdadebca1e9c00",
+      "checks": {
+        "binary_occlusion": true,
+        "binary_out_of_view": true,
+        "level_sum_matches_sync": true,
+        "pattern_sum_matches_sync": true,
+        "receiver_state_partition": true,
+        "receiver_total_matches_patterns": true,
+        "run_frames_match_asymmetric": true
+      },
+      "discarded_unsynchronized_tail_frames": 0,
+      "invalid_bbox_count_within_sync": 0,
+      "natural_asymmetric_ratio_pct": "8.821135",
+      "natural_asymmetric_receiver_frames": 1192,
+      "occlusion_values": [
+        0,
+        1
+      ],
+      "out_of_view_values": [
+        0
+      ],
+      "sequence_count": 15,
+      "split_file": "lib/train/data_specs/threemdot/threemdot_val.txt",
+      "split_sha256": "d8a768102b9600b6f6e4d9e6677cffe6858f7c3f3a276fe0e6e649e5738899c8",
+      "synchronized_triplets": 4704,
+      "target_count": 5
+    }
+  },
+  "synchronization_definition": "same target and 0-based frame index; length=min(A,B,C)",
+  "task": "D2-P0 Three-MDOT Natural Visibility and Receiver-visible Sampling Audit",
+  "train_val_target_overlap_count": 0,
+  "training_run": false,
+  "validation_tracking_rollout_run": false,
+  "visibility_definition": "(occlusion == 0) AND (out_of_view == 0) AND (bbox_w > 0) AND (bbox_h > 0)"
+}

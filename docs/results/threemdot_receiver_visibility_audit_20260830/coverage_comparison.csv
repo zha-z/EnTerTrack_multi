@@ -1,0 +1,3 @@
+split,synchronized_triplets,N_common,current_common_visible_receiver_capacity,N_receiver_A,N_receiver_B,N_receiver_C,N_receiver_total,receiver_visible_expansion_ratio,extra_receiver_frames,percentage_increase,natural_asymmetric_receiver_frames,natural_asymmetric_percentage,common_per_target_min,common_per_target_max,common_per_target_mean,common_per_target_median,targets_with_natural_asymmetry,top1_target_asymmetry_share_percentage,top3_target_asymmetry_share_percentage
+train,16138,12064,36192,14638,13547,14552,42737,1.180841070,6545,18.084107,6545,15.314599,0,1028,524.521739,510.000000,18,23.804431,49.854851
+val,4704,4107,12321,4236,4663,4614,13513,1.096745394,1192,9.674539,1192,8.821135,463,1136,821.400000,805.000000,5,54.026846,92.785235
