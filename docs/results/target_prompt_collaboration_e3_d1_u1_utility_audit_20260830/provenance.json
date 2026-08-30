@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "task": "E3-D1-U1 Asymmetric-Degradation Checkpoint Per-Sender Counterfactual Utility Audit",
+  "generated_at": "2026-08-30T20:21:12+08:00",
+  "repository": "zha-z/EnTerTrack_multi",
+  "branch": "feature/pcum-cross-layer-arp",
+  "implementation_base_head": "8d3fa0db6c8ad0fe83f447033df497fd0303cd25",
+  "dataset": {
+    "name": "threemdot_val",
+    "target_count": 5,
+    "sequence_count": 15,
+    "receiver_frame_groups": 14112,
+    "active_receiver_frames": 14097,
+    "visible_valid_receiver_frames": 13513,
+    "visible_valid_sender_rows": 27026
+  },
+  "checkpoint": {
+    "path": "output/diagnostics/target_prompt_collaboration_e3_d1/run_20260830_seed42_4gpu_r001/checkpoints/train/entertrack/target_prompt_collaboration_e3_d1/EnTeRTrack_ep0025.pth.tar",
+    "sha256": "231e20df89c184dbe5411fa687b625b809d4c1580df64059ec9d50f3c62a1c2b",
+    "tracker_param": "target_prompt_collaboration_e3_d1",
+    "runid": "e3_d1_u1_val_20260830"
+  },
+  "prediction_freeze": {
+    "phase": "prediction_freeze_before_gt_join",
+    "branch_file": "prediction_only_d1_sender_counterfactual.csv",
+    "branch_rows": 56448,
+    "branch_sha256": "72a4b3345fbb1f6807bac17bbeaf090e51f09cbe0bc20319492b1c28d04f9942",
+    "prompt_feature_file": "prediction_only_d1_prompt_features.csv",
+    "prompt_feature_rows": 28224,
+    "prompt_feature_sha256": "c5702a26afd47f3ba03431ddfdf933b916eb9de6017a524e9fe95abc24d38087",
+    "local_bbox_exact_vs_e3_rows": 14112,
+    "uses_gt": false,
+    "runtime_audit": {
+      "active_receiver_frames": 14097,
+      "both_report_mismatch": 0,
+      "local_forward_mismatch": 0,
+      "local_state_mismatch": 0,
+      "state_mutation": 0,
+      "uses_gt_rows": 0
+    }
+  },
+  "posthoc_analysis": {
+    "profile": "d1_descriptive_no_selector",
+    "helpful_threshold": 0.02,
+    "harmful_threshold": -0.02,
+    "actual_relative_norm_cap": 0.25,
+    "cap_hit_tolerance": 0.000001,
+    "e3_reference_prediction_sha256": "09d74a9f4060654b5843e8d3dd4355b0b8e669d71556bb49ea7c80b08f77d9c3",
+    "oracle_uses_gt_posthoc": true,
+    "uses_gt_at_runtime": false,
+    "logistic_regression_run": false,
+    "selector_run": false,
+    "frozen_case": "C",
+    "next_action": "B_redesign_degradation"
+  },
+  "artifact_sha256": {
+    "aggregation_interaction_analysis.csv": "0d629fb401e45a3837d98195d425dae4858ed9d7dc556b360bae9a5f647b73b8",
+    "cap_saturation_utility.csv": "add3e75a958ae6e54a8780e547d41fae58053d22b42e7e0440a1d139ffc6fb31",
+    "e3_vs_d1_utility_summary.csv": "9eeb2c4a01fcffca8c800d091f462c2c1f92bb5420cf4941ee332e7ded064e11",
+    "oracle_headroom_summary.csv": "e74eb501576a5cad8952431a95f95181286d8f05ebb009b6296628823bcc6951",
+    "per_sender_summary.csv": "92c5b5fbc47cb31b31b21234b6b865d01078c74f4c4a72f4c0b1e380cef76bb3",
+    "per_target_summary.csv": "0b2e28728b2b4a078e52e3726252f6a7676cb35f11c0beff507e79332468f5b2",
+    "per_view_summary.csv": "0ff133dedd796f5fd81dc79a71a73c5ce3a0c1d84842fe4dc9a6854cca1bc9fc",
+    "posthoc_d1_sender_labels.csv": "cf30d3aab8bb94c66da6be13a7b8dc1d47fd72d30ed41e0c1bddb802f05838ef",
+    "residual_delta_iou_correlation.csv": "a7183fff23739c7590904b7893eec22bc10621d8d221fcf1b4f7c6c5e49b8626",
+    "residual_utility_quantiles.csv": "74e545fdf0487135dd8d60d35c2b25e3a78596c187a0a4476404a38913de7708"
+  },
+  "implementation_sha256": {
+    "tracking/run_target_prompt_e3_u1_counterfactual.py": "a7a77e17ba9deee08ef4ecfb281ac99cf70e436d19ffd62bd658c34f054a5642",
+    "tracking/analyze_target_prompt_e3_u1_utility.py": "aa024e1b5d4df1a39a9d0dffd402b143104a872a1539bbc404f75e79b7f4566b",
+    "tests/test_target_prompt_e3_u1.py": "e208cbae8f444a1a99593e1d9a260653270ff6cc90a5c7a9ce32b2d64bb042bb"
+  },
+  "execution_scope": {
+    "full_val_prediction_rollouts": 1,
+    "training_run": false,
+    "training_or_checkpoint_backward_run": false,
+    "synthetic_unit_test_backward_checks": true,
+    "optimizer_run": false,
+    "threemdot_test_accessed": false,
+    "official_test_rerun": false,
+    "parameter_sweep_run": false,
+    "d2_implemented": false,
+    "sampler_modified": false,
+    "model_or_checkpoint_modified": false
+  }
+}

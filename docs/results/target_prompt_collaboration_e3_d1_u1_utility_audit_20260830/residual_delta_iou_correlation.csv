@@ -1,0 +1,5 @@
+branch,frame_count,spearman_relative_residual_norm_vs_delta_iou,interpretation
+sender0_only,13498,-0.05735623332367651,posthoc_descriptive_not_runtime_selector
+sender1_only,13498,-0.042626066239107446,posthoc_descriptive_not_runtime_selector
+single_sender,26996,-0.06405878076533074,posthoc_descriptive_not_runtime_selector
+both,13498,-0.03801155619874688,posthoc_descriptive_not_runtime_selector

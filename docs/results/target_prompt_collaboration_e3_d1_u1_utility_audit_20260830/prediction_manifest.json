@@ -1,0 +1,181 @@
+{
+  "artifact_label": "d1",
+  "branch_columns": [
+    "sequence_name",
+    "target_id",
+    "receiver_view",
+    "frame_id",
+    "selected_sender_views",
+    "local_bbox_x",
+    "local_bbox_y",
+    "local_bbox_w",
+    "local_bbox_h",
+    "branch_bbox_x",
+    "branch_bbox_y",
+    "branch_bbox_w",
+    "branch_bbox_h",
+    "local_score",
+    "local_apce",
+    "branch_score",
+    "branch_apce",
+    "local_branch_center_displacement",
+    "local_branch_scale_difference",
+    "residual_norm",
+    "relative_residual_norm",
+    "residual_scale",
+    "remote_count",
+    "used_remote",
+    "local_forward_delta",
+    "state_digest_before",
+    "state_digest_after_collaboration",
+    "state_identity",
+    "sender_prompt_source",
+    "state_output_source",
+    "uses_gt",
+    "branch_name",
+    "branch",
+    "valid_remote_count",
+    "reported_output_source"
+  ],
+  "branch_file": "prediction_only_d1_sender_counterfactual.csv",
+  "branch_rows": 56448,
+  "branch_sha256": "72a4b3345fbb1f6807bac17bbeaf090e51f09cbe0bc20319492b1c28d04f9942",
+  "branches": [
+    "local",
+    "sender0_only",
+    "sender1_only",
+    "both"
+  ],
+  "checkpoint": "/data/zjy/EnTeR-Track-main/output/diagnostics/target_prompt_collaboration_e3_d1/run_20260830_seed42_4gpu_r001/checkpoints/train/entertrack/target_prompt_collaboration_e3_d1/EnTeRTrack_ep0025.pth.tar",
+  "checkpoint_sha256": "231e20df89c184dbe5411fa687b625b809d4c1580df64059ec9d50f3c62a1c2b",
+  "dataset": "threemdot_val",
+  "extended_prediction_schema": true,
+  "phase": "prediction_freeze_before_gt_join",
+  "prompt_feature_columns": [
+    "sequence_name",
+    "target_id",
+    "receiver_view",
+    "frame_id",
+    "sender_slot",
+    "sender_view",
+    "remote_count",
+    "uses_gt",
+    "sender_score",
+    "sender_apce",
+    "receiver_score",
+    "receiver_apce",
+    "prompt_topk_score_mean",
+    "prompt_topk_score_std",
+    "prompt_topk_score_min",
+    "prompt_topk_score_max",
+    "prompt_top1_top8_gap",
+    "prompt_norm_mean",
+    "prompt_norm_std",
+    "prompt_pairwise_cos_mean",
+    "prompt_pairwise_cos_std",
+    "prompt_pairwise_cos_min",
+    "prompt_pairwise_cos_max",
+    "set_cos_mean",
+    "set_cos_max",
+    "sender_to_receiver_best_mean",
+    "receiver_to_sender_best_mean",
+    "symmetric_best_match",
+    "branch_score",
+    "branch_apce",
+    "local_branch_center_displacement",
+    "local_branch_scale_difference",
+    "residual_norm",
+    "relative_residual_norm",
+    "residual_scale"
+  ],
+  "prompt_feature_file": "prediction_only_d1_prompt_features.csv",
+  "prompt_feature_rows": 28224,
+  "prompt_feature_sha256": "c5702a26afd47f3ba03431ddfdf933b916eb9de6017a524e9fe95abc24d38087",
+  "relative_norm_cap": 0.25,
+  "runid": "e3_d1_u1_val_20260830",
+  "runtime_audit": {
+    "active_receiver_frames": 14097,
+    "both_report_mismatch": 0,
+    "local_forward_mismatch": 0,
+    "local_state_mismatch": 0,
+    "state_mutation": 0,
+    "uses_gt_rows": 0
+  },
+  "schema_version": 1,
+  "sequence_count": 15,
+  "target_count": 5,
+  "targets": [
+    {
+      "processed_frame_count": 970,
+      "sequences": [
+        "md3016-1",
+        "md3016-2",
+        "md3016-3"
+      ],
+      "source_frame_count": [
+        970,
+        970,
+        970
+      ],
+      "target_id": "md3016"
+    },
+    {
+      "processed_frame_count": 1136,
+      "sequences": [
+        "md3027-1",
+        "md3027-2",
+        "md3027-3"
+      ],
+      "source_frame_count": [
+        1136,
+        1136,
+        1136
+      ],
+      "target_id": "md3027"
+    },
+    {
+      "processed_frame_count": 909,
+      "sequences": [
+        "md3034-1",
+        "md3034-2",
+        "md3034-3"
+      ],
+      "source_frame_count": [
+        909,
+        909,
+        909
+      ],
+      "target_id": "md3034"
+    },
+    {
+      "processed_frame_count": 530,
+      "sequences": [
+        "md3048-1",
+        "md3048-2",
+        "md3048-3"
+      ],
+      "source_frame_count": [
+        530,
+        530,
+        530
+      ],
+      "target_id": "md3048"
+    },
+    {
+      "processed_frame_count": 1159,
+      "sequences": [
+        "md3055-1",
+        "md3055-2",
+        "md3055-3"
+      ],
+      "source_frame_count": [
+        1159,
+        1159,
+        1159
+      ],
+      "target_id": "md3055"
+    }
+  ],
+  "tracker_param": "target_prompt_collaboration_e3_d1",
+  "uses_gt": false
+}

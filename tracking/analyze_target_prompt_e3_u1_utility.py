@@ -373,13 +373,16 @@ def _oof_policy(branch_groups, probability):
     return rows, boxes, counts
 
 
-def _sequence_metrics(branch_groups, sequence_map, oof_boxes):
+def _sequence_metrics(branch_groups, sequence_map, oof_boxes=None):
     by_sequence = defaultdict(list)
     for key, branches in branch_groups.items():
         by_sequence[key[0]].append((int(key[3]), key, branches))
-    variants = (
+    variants = [
         "local", "sender0_only", "sender1_only", "both",
-        "oof_selector", "oracle_single", "oracle_4")
+        "oracle_single", "oracle_4"]
+    if oof_boxes is not None:
+        variants.insert(4, "oof_selector")
+    variants = tuple(variants)
     output = []
     for sequence_name, frames in by_sequence.items():
         frames.sort(key=lambda item: item[0])
@@ -396,8 +399,9 @@ def _sequence_metrics(branch_groups, sequence_map, oof_boxes):
             prediction["sender0_only"].append(candidates["sender0_only"])
             prediction["sender1_only"].append(candidates["sender1_only"])
             prediction["both"].append(candidates["both"])
-            prediction["oof_selector"].append(
-                np.asarray(oof_boxes[key]).astype(int).astype(float))
+            if oof_boxes is not None:
+                prediction["oof_selector"].append(
+                    np.asarray(oof_boxes[key]).astype(int).astype(float))
             is_visible = True if visible is None else bool(visible[frame_id])
             if is_visible:
                 ious = {name: iou_xywh(box, target[frame_id])
@@ -518,6 +522,394 @@ def _aggregation(labels):
     return output
 
 
+def _active_branch_utility(branch_groups, label_map):
+    output = []
+    for key, branches in branch_groups.items():
+        frame_id = int(key[3])
+        label_row = label_map[key]
+        if frame_id <= 0 or not _bool(label_row, "valid_for_analysis"):
+            continue
+        for branch, slot in (("sender0_only", 0),
+                             ("sender1_only", 1), ("both", None)):
+            prediction = branches[branch]
+            delta_name = ("delta_iou_both" if slot is None else
+                          "delta_iou_sender{}".format(slot))
+            label_name = ("label_both" if slot is None else
+                          "label_sender{}".format(slot))
+            output.append({
+                "sequence_name": key[0],
+                "target_id": key[1],
+                "receiver_view": key[2],
+                "frame_id": frame_id,
+                "branch": branch,
+                "relative_residual_norm": _float(
+                    prediction, "relative_residual_norm"),
+                "delta_iou": _float(label_row, delta_name),
+                "label": label_row[label_name],
+                "used_remote": _bool(prediction, "used_remote"),
+            })
+    return output
+
+
+def _utility_stats(records):
+    counts = Counter(row["label"] for row in records)
+    deltas = [float(row["delta_iou"]) for row in records]
+    count = len(records)
+    return {
+        "frame_count": count,
+        "helpful_count": counts["helpful"],
+        "harmful_count": counts["harmful"],
+        "tie_count": counts["tie"],
+        "helpful_ratio": counts["helpful"] / count if count else float("nan"),
+        "harmful_ratio": counts["harmful"] / count if count else float("nan"),
+        "tie_ratio": counts["tie"] / count if count else float("nan"),
+        "mean_delta_iou": float(np.mean(deltas)) if deltas else float("nan"),
+        "mean_absolute_delta_iou": (float(np.mean(np.abs(deltas)))
+                                    if deltas else float("nan")),
+        "mean_relative_residual_norm": (float(np.mean([
+            float(row["relative_residual_norm"]) for row in records]))
+            if records else float("nan")),
+    }
+
+
+def _residual_quantiles(records):
+    output = []
+    for branch in ("sender0_only", "sender1_only", "both"):
+        selected = [row for row in records if row["branch"] == branch]
+        values = np.asarray([
+            float(row["relative_residual_norm"]) for row in selected],
+            dtype=float)
+        cuts = np.quantile(values, (0.25, 0.50, 0.75), method="linear")
+        bins = [[] for _ in range(4)]
+        for row in selected:
+            index = int(np.searchsorted(
+                cuts, float(row["relative_residual_norm"]), side="left"))
+            bins[index].append(row)
+        for index, current in enumerate(bins):
+            output.append({
+                "branch": branch,
+                "quantile": "Q{}".format(index + 1),
+                "q25_cut": float(cuts[0]),
+                "q50_cut": float(cuts[1]),
+                "q75_cut": float(cuts[2]),
+                **_utility_stats(current),
+            })
+    return output
+
+
+def _cap_saturation(records, cap):
+    output = []
+    branch_records = {
+        branch: [row for row in records if row["branch"] == branch]
+        for branch in ("sender0_only", "sender1_only", "both")}
+    branch_records["single_sender"] = (
+        branch_records["sender0_only"] + branch_records["sender1_only"])
+    for branch in ("sender0_only", "sender1_only", "single_sender", "both"):
+        selected = branch_records[branch]
+        for cap_hit in (False, True):
+            current = [
+                row for row in selected
+                if (float(row["relative_residual_norm"]) >= cap - 1e-6)
+                == cap_hit]
+            output.append({
+                "branch": branch,
+                "cap_status": "cap_hit" if cap_hit else "non_cap_hit",
+                "actual_relative_norm_cap": cap,
+                "cap_hit_rule": "relative_residual_norm >= cap - 1e-6",
+                "branch_frame_count": len(selected),
+                "frame_ratio": (len(current) / len(selected)
+                                if selected else float("nan")),
+                **_utility_stats(current),
+            })
+    return output
+
+
+def _average_ranks(values):
+    values = np.asarray(values, dtype=float)
+    order = np.argsort(values, kind="mergesort")
+    ranks = np.empty(len(values), dtype=float)
+    start = 0
+    while start < len(values):
+        end = start + 1
+        while end < len(values) and values[order[end]] == values[order[start]]:
+            end += 1
+        ranks[order[start:end]] = 0.5 * (start + end - 1) + 1.0
+        start = end
+    return ranks
+
+
+def _spearman(records):
+    pairs = [
+        (float(row["relative_residual_norm"]), float(row["delta_iou"]))
+        for row in records
+        if math.isfinite(float(row["relative_residual_norm"]))
+        and math.isfinite(float(row["delta_iou"]))]
+    if len(pairs) < 2:
+        return float("nan")
+    x_rank = _average_ranks([item[0] for item in pairs])
+    y_rank = _average_ranks([item[1] for item in pairs])
+    if np.std(x_rank) < 1e-12 or np.std(y_rank) < 1e-12:
+        return float("nan")
+    return float(np.corrcoef(x_rank, y_rank)[0, 1])
+
+
+def _residual_correlations(records):
+    groups = {
+        "sender0_only": [row for row in records
+                         if row["branch"] == "sender0_only"],
+        "sender1_only": [row for row in records
+                         if row["branch"] == "sender1_only"],
+        "single_sender": [row for row in records
+                          if row["branch"] in
+                          ("sender0_only", "sender1_only")],
+        "both": [row for row in records if row["branch"] == "both"],
+    }
+    return [{
+        "branch": branch,
+        "frame_count": len(selected),
+        "spearman_relative_residual_norm_vs_delta_iou": _spearman(selected),
+        "interpretation": "posthoc_descriptive_not_runtime_selector",
+    } for branch, selected in groups.items()]
+
+
+def _sender_rates(labels):
+    valid = [row for row in labels if _bool(row, "valid_for_analysis")]
+    sender_labels = [
+        row[name] for row in valid
+        for name in ("label_sender0", "label_sender1")]
+    counts = Counter(sender_labels)
+    delta_values = [
+        _float(row, name) for row in valid
+        for name in ("delta_iou_sender0", "delta_iou_sender1")]
+    return {
+        "valid_receiver_frames": len(valid),
+        "valid_sender_rows": len(sender_labels),
+        "remote_help_available_count": sum(
+            _bool(row, "remote_help_available") for row in valid),
+        "remote_help_available_ratio": (sum(
+            _bool(row, "remote_help_available") for row in valid) / len(valid)),
+        "helpful_count": counts["helpful"],
+        "harmful_count": counts["harmful"],
+        "tie_count": counts["tie"],
+        "helpful_ratio": counts["helpful"] / len(sender_labels),
+        "harmful_ratio": counts["harmful"] / len(sender_labels),
+        "tie_ratio": counts["tie"] / len(sender_labels),
+        "mean_delta_iou": float(np.mean(delta_values)),
+    }
+
+
+def _index_metrics(rows, group_type, group):
+    return {
+        row["variant"]: row for row in rows
+        if row["group_type"] == group_type and row["group"] == group
+    }
+
+
+def _comparison_rows(e3_overall, d1_overall, e3_rates, d1_rates,
+                     e3_utility, d1_utility):
+    output = []
+
+    def add(category, metric, e3, d1, unit):
+        output.append({
+            "category": category,
+            "metric": metric,
+            "e3_value": e3,
+            "e3_d1_value": d1,
+            "d1_minus_e3": d1 - e3,
+            "unit": unit,
+        })
+
+    for variant in ("local", "sender0_only", "sender1_only", "both",
+                    "oracle_single", "oracle_4"):
+        add("tracking_auc", variant, float(e3_overall[variant]["auc"]),
+            float(d1_overall[variant]["auc"]), "auc_fraction")
+    add("tracking_auc", "oracle_single_headroom_vs_local",
+        float(e3_overall["oracle_single"]["auc"])
+        - float(e3_overall["local"]["auc"]),
+        float(d1_overall["oracle_single"]["auc"])
+        - float(d1_overall["local"]["auc"]), "auc_fraction")
+    for name in ("remote_help_available_ratio", "helpful_ratio",
+                 "harmful_ratio", "tie_ratio", "mean_delta_iou"):
+        add("sender_utility", name, float(e3_rates[name]),
+            float(d1_rates[name]), "fraction")
+    for branch in ("sender0_only", "sender1_only", "both"):
+        e3_selected = [row for row in e3_utility if row["branch"] == branch]
+        d1_selected = [row for row in d1_utility if row["branch"] == branch]
+        add("residual", "{}_mean_relative_residual_norm".format(branch),
+            _utility_stats(e3_selected)["mean_relative_residual_norm"],
+            _utility_stats(d1_selected)["mean_relative_residual_norm"],
+            "fraction")
+    return output
+
+
+def _per_target_comparison(d1_rows, e3_rows):
+    targets = sorted({row["group"] for row in d1_rows})
+    output = []
+    for target in targets:
+        d1 = _index_metrics(d1_rows, "target_id", target)
+        e3 = _index_metrics(e3_rows, "target_id", target)
+        output.append({
+            "target_id": target,
+            "local_auc": float(d1["local"]["auc"]),
+            "both_d1_auc": float(d1["both"]["auc"]),
+            "oracle_single_d1_auc": float(d1["oracle_single"]["auc"]),
+            "both_d1_minus_local": (float(d1["both"]["auc"])
+                                     - float(d1["local"]["auc"])),
+            "oracle_single_d1_minus_local": (
+                float(d1["oracle_single"]["auc"])
+                - float(d1["local"]["auc"])),
+            "both_e3_auc": float(e3["both"]["auc"]),
+            "oracle_single_e3_auc": float(e3["oracle_single"]["auc"]),
+            "both_e3_minus_local": (float(e3["both"]["auc"])
+                                    - float(e3["local"]["auc"])),
+            "oracle_single_e3_minus_local": (
+                float(e3["oracle_single"]["auc"])
+                - float(e3["local"]["auc"])),
+            "d1_minus_e3_both_auc": (float(d1["both"]["auc"])
+                                      - float(e3["both"]["auc"])),
+            "d1_minus_e3_oracle_single_auc": (
+                float(d1["oracle_single"]["auc"])
+                - float(e3["oracle_single"]["auc"])),
+        })
+    return output
+
+
+def analyze_d1_descriptive(output_dir, dataset_name, e3_reference_dir):
+    if dataset_name.lower() in FORBIDDEN_DATASETS or "test" in dataset_name.lower():
+        raise RuntimeError("official test GT join is forbidden")
+    output_dir = Path(output_dir).resolve()
+    e3_reference_dir = Path(e3_reference_dir).resolve()
+
+    manifest, branch_path, feature_path = _verify_prediction_freeze(output_dir)
+    if manifest.get("tracker_param") != "target_prompt_collaboration_e3_d1":
+        raise RuntimeError("D1 descriptive profile requires the frozen D1 tracker")
+    cap = float(manifest["relative_norm_cap"])
+    branch_rows = _read_csv(branch_path)
+    feature_rows = _read_csv(feature_path)
+    if len(branch_rows) != manifest["branch_rows"]:
+        raise RuntimeError("branch row count mismatch")
+    if len(feature_rows) != manifest["prompt_feature_rows"]:
+        raise RuntimeError("prompt feature row count mismatch")
+    branch_groups = _group(branch_rows, IDENTITY, "branch_name")
+
+    # This is the first point at which GT is loaded. Prediction artifacts and
+    # hashes have already been independently frozen and verified above.
+    dataset = get_dataset(dataset_name)
+    sequence_map = {sequence.name: sequence for sequence in dataset}
+    labels, label_map = _join_labels(
+        branch_groups, sequence_map, manifest["branch_sha256"])
+    write_csv(output_dir / "posthoc_d1_sender_labels.csv", labels)
+    sender_records = _join_sender_features(feature_rows, label_map)
+
+    sequence_rows = _sequence_metrics(branch_groups, sequence_map)
+    overall = _macro(sequence_rows)
+    per_view = _macro(sequence_rows, "receiver_view")
+    per_target = _macro(sequence_rows, "target_id")
+    for rows in (overall, per_view, per_target):
+        local_by_group = {row["group"]: row["auc"] for row in rows
+                          if row["variant"] == "local"}
+        for row in rows:
+            row["auc_delta_vs_local"] = (
+                row["auc"] - local_by_group[row["group"]])
+            row["gt_oracle"] = row["variant"].startswith("oracle")
+    d1_rates = _sender_rates(labels)
+    for row in overall:
+        row["remote_help_available_ratio"] = d1_rates[
+            "remote_help_available_ratio"]
+    write_csv(output_dir / "oracle_headroom_summary.csv", overall)
+    write_csv(output_dir / "per_sender_summary.csv",
+              _sender_summary(sender_records, sequence_rows))
+    write_csv(output_dir / "aggregation_interaction_analysis.csv",
+              _aggregation(labels))
+
+    utility_records = _active_branch_utility(branch_groups, label_map)
+    write_csv(output_dir / "residual_utility_quantiles.csv",
+              _residual_quantiles(utility_records))
+    write_csv(output_dir / "cap_saturation_utility.csv",
+              _cap_saturation(utility_records, cap))
+    write_csv(output_dir / "residual_delta_iou_correlation.csv",
+              _residual_correlations(utility_records))
+
+    e3_manifest, e3_branch_path, _ = _verify_prediction_freeze(
+        e3_reference_dir)
+    e3_overall_rows = _read_csv(
+        e3_reference_dir / "oracle_headroom_summary.csv")
+    e3_view_rows = _read_csv(e3_reference_dir / "oracle_per_view.csv")
+    e3_target_rows = _read_csv(e3_reference_dir / "oracle_per_target.csv")
+    e3_label_rows = _read_csv(
+        e3_reference_dir / "posthoc_e3_sender_labels.csv")
+    e3_rates = _sender_rates(e3_label_rows)
+    e3_branch_rows = _read_csv(e3_branch_path)
+    e3_branch_groups = _group(e3_branch_rows, IDENTITY, "branch_name")
+    e3_label_map = {
+        tuple(row[name] for name in IDENTITY): row
+        for row in e3_label_rows}
+    e3_utility_records = _active_branch_utility(
+        e3_branch_groups, e3_label_map)
+
+    d1_overall = _index_metrics(overall, "overall", "all")
+    e3_overall = _index_metrics(e3_overall_rows, "overall", "all")
+    comparison = _comparison_rows(
+        e3_overall, d1_overall, e3_rates, d1_rates,
+        e3_utility_records, utility_records)
+    write_csv(output_dir / "e3_vs_d1_utility_summary.csv", comparison)
+
+    variants = {
+        "local", "sender0_only", "sender1_only", "both",
+        "oracle_single", "oracle_4"}
+    combined_view = []
+    for family, rows in (("E3", e3_view_rows), ("E3-D1", per_view)):
+        for row in rows:
+            if row["variant"] not in variants:
+                continue
+            combined_view.append({"checkpoint_family": family, **row})
+    write_csv(output_dir / "per_view_summary.csv", combined_view)
+    write_csv(output_dir / "per_target_summary.csv",
+              _per_target_comparison(per_target, e3_target_rows))
+
+    produced = (
+        "posthoc_d1_sender_labels.csv", "e3_vs_d1_utility_summary.csv",
+        "per_sender_summary.csv", "per_view_summary.csv",
+        "per_target_summary.csv", "oracle_headroom_summary.csv",
+        "aggregation_interaction_analysis.csv",
+        "residual_utility_quantiles.csv", "cap_saturation_utility.csv",
+        "residual_delta_iou_correlation.csv")
+    analysis_manifest = {
+        "phase": "posthoc_gt_join_descriptive_only",
+        "dataset": dataset_name,
+        "profile": "d1_descriptive_no_selector",
+        "prediction_branch_sha256_verified": manifest["branch_sha256"],
+        "prediction_prompt_feature_sha256_verified": manifest[
+            "prompt_feature_sha256"],
+        "checkpoint_sha256": manifest["checkpoint_sha256"],
+        "e3_reference_prediction_sha256_verified": e3_manifest[
+            "branch_sha256"],
+        "receiver_frame_groups": len(branch_groups),
+        "valid_receiver_frames": d1_rates["valid_receiver_frames"],
+        "valid_sender_rows": d1_rates["valid_sender_rows"],
+        "remote_help_available_count": d1_rates[
+            "remote_help_available_count"],
+        "remote_help_available_ratio": d1_rates[
+            "remote_help_available_ratio"],
+        "helpful_threshold": 0.02,
+        "harmful_threshold": -0.02,
+        "actual_relative_norm_cap": cap,
+        "cap_hit_tolerance": 1e-6,
+        "logistic_regression_run": False,
+        "selector_run": False,
+        "uses_gt_at_runtime": False,
+        "oracle_uses_gt_posthoc": True,
+        "artifacts": {
+            name: {"sha256": _sha256(output_dir / name),
+                   "rows": len(_read_csv(output_dir / name))}
+            for name in produced},
+    }
+    (output_dir / "posthoc_analysis_manifest.json").write_text(
+        json.dumps(analysis_manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8")
+    print(json.dumps(analysis_manifest, indent=2, sort_keys=True))
+
+
 def analyze(output_dir, dataset_name):
     if dataset_name.lower() in FORBIDDEN_DATASETS or "test" in dataset_name.lower():
         raise RuntimeError("official test GT join is forbidden")
@@ -606,8 +998,20 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--dataset", default="threemdot_val")
+    parser.add_argument(
+        "--profile", choices=("e3_selector", "d1_descriptive"),
+        default="e3_selector",
+        help="Default preserves the original E3-U1 selector analysis")
+    parser.add_argument(
+        "--e3-reference-dir", default=(
+            "docs/results/"
+            "target_prompt_collaboration_e3_u1_utility_audit_20260829"))
     args = parser.parse_args()
-    analyze(args.output_dir, args.dataset)
+    if args.profile == "d1_descriptive":
+        analyze_d1_descriptive(
+            args.output_dir, args.dataset, args.e3_reference_dir)
+    else:
+        analyze(args.output_dir, args.dataset)
 
 
 if __name__ == "__main__":

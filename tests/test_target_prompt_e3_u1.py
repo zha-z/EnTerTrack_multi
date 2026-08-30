@@ -3,8 +3,13 @@ import unittest
 import torch
 
 from tracking.analyze_target_prompt_e3_u1_utility import (
-    P0, P1, P2, P3, P4)
+    P0, P1, P2, P3, P4,
+    _cap_saturation,
+    _residual_correlations,
+    _residual_quantiles,
+)
 from tracking.run_target_prompt_e3_u1_counterfactual import (
+    _artifact_profile,
     _bbox_disagreement,
     _masked_remote_candidates,
     _prompt_stats,
@@ -62,6 +67,42 @@ class TargetPromptE3U1Tests(unittest.TestCase):
         self.assertTrue(set(P1).issubset(P2))
         self.assertTrue(set(P2).issubset(P3))
         self.assertTrue(set(P3).issubset(P4))
+
+    def test_d1_artifact_profile_preserves_default_e3_names(self):
+        self.assertEqual(
+            _artifact_profile("target_prompt_collaboration_e3"),
+            ("e3", False))
+        self.assertEqual(
+            _artifact_profile("target_prompt_collaboration_e3_d1"),
+            ("d1", True))
+        with self.assertRaises(ValueError):
+            _artifact_profile("unfrozen_experiment")
+
+    def test_residual_descriptive_helpers_use_frozen_cap_rule(self):
+        records = []
+        for branch in ("sender0_only", "sender1_only", "both"):
+            for index, value in enumerate((0.10, 0.20, 0.249998, 0.249999)):
+                records.append({
+                    "branch": branch,
+                    "relative_residual_norm": value,
+                    "delta_iou": value - 0.15,
+                    "label": ("helpful" if value - 0.15 > 0.02 else
+                              "harmful" if value - 0.15 < -0.02 else "tie"),
+                })
+        quantiles = _residual_quantiles(records)
+        self.assertEqual(len(quantiles), 12)
+        self.assertEqual(sum(row["frame_count"] for row in quantiles), 12)
+        cap_rows = _cap_saturation(records, 0.25)
+        sender0_hit = next(
+            row for row in cap_rows
+            if row["branch"] == "sender0_only"
+            and row["cap_status"] == "cap_hit")
+        self.assertEqual(sender0_hit["frame_count"], 1)
+        correlations = _residual_correlations(records)
+        pooled = next(row for row in correlations
+                      if row["branch"] == "single_sender")
+        self.assertAlmostEqual(
+            pooled["spearman_relative_residual_norm_vs_delta_iou"], 1.0)
 
 
 if __name__ == "__main__":

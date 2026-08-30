@@ -1,0 +1,64 @@
+{
+  "actual_relative_norm_cap": 0.25,
+  "artifacts": {
+    "aggregation_interaction_analysis.csv": {
+      "rows": 9,
+      "sha256": "0d629fb401e45a3837d98195d425dae4858ed9d7dc556b360bae9a5f647b73b8"
+    },
+    "cap_saturation_utility.csv": {
+      "rows": 8,
+      "sha256": "add3e75a958ae6e54a8780e547d41fae58053d22b42e7e0440a1d139ffc6fb31"
+    },
+    "e3_vs_d1_utility_summary.csv": {
+      "rows": 15,
+      "sha256": "9eeb2c4a01fcffca8c800d091f462c2c1f92bb5420cf4941ee332e7ded064e11"
+    },
+    "oracle_headroom_summary.csv": {
+      "rows": 6,
+      "sha256": "e74eb501576a5cad8952431a95f95181286d8f05ebb009b6296628823bcc6951"
+    },
+    "per_sender_summary.csv": {
+      "rows": 6,
+      "sha256": "92c5b5fbc47cb31b31b21234b6b865d01078c74f4c4a72f4c0b1e380cef76bb3"
+    },
+    "per_target_summary.csv": {
+      "rows": 5,
+      "sha256": "0b2e28728b2b4a078e52e3726252f6a7676cb35f11c0beff507e79332468f5b2"
+    },
+    "per_view_summary.csv": {
+      "rows": 36,
+      "sha256": "0ff133dedd796f5fd81dc79a71a73c5ce3a0c1d84842fe4dc9a6854cca1bc9fc"
+    },
+    "posthoc_d1_sender_labels.csv": {
+      "rows": 14112,
+      "sha256": "cf30d3aab8bb94c66da6be13a7b8dc1d47fd72d30ed41e0c1bddb802f05838ef"
+    },
+    "residual_delta_iou_correlation.csv": {
+      "rows": 4,
+      "sha256": "a7183fff23739c7590904b7893eec22bc10621d8d221fcf1b4f7c6c5e49b8626"
+    },
+    "residual_utility_quantiles.csv": {
+      "rows": 12,
+      "sha256": "74e545fdf0487135dd8d60d35c2b25e3a78596c187a0a4476404a38913de7708"
+    }
+  },
+  "cap_hit_tolerance": 1e-06,
+  "checkpoint_sha256": "231e20df89c184dbe5411fa687b625b809d4c1580df64059ec9d50f3c62a1c2b",
+  "dataset": "threemdot_val",
+  "e3_reference_prediction_sha256_verified": "09d74a9f4060654b5843e8d3dd4355b0b8e669d71556bb49ea7c80b08f77d9c3",
+  "harmful_threshold": -0.02,
+  "helpful_threshold": 0.02,
+  "logistic_regression_run": false,
+  "oracle_uses_gt_posthoc": true,
+  "phase": "posthoc_gt_join_descriptive_only",
+  "prediction_branch_sha256_verified": "72a4b3345fbb1f6807bac17bbeaf090e51f09cbe0bc20319492b1c28d04f9942",
+  "prediction_prompt_feature_sha256_verified": "c5702a26afd47f3ba03431ddfdf933b916eb9de6017a524e9fe95abc24d38087",
+  "profile": "d1_descriptive_no_selector",
+  "receiver_frame_groups": 14112,
+  "remote_help_available_count": 1526,
+  "remote_help_available_ratio": 0.11292829127506845,
+  "selector_run": false,
+  "uses_gt_at_runtime": false,
+  "valid_receiver_frames": 13513,
+  "valid_sender_rows": 27026
+}

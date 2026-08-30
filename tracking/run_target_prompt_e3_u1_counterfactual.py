@@ -32,6 +32,16 @@ from lib.test.evaluation.tracker import Tracker  # noqa: E402
 
 BRANCHES = ("local", "sender0_only", "sender1_only", "both")
 VIEWS = ("A", "B", "C")
+DEFAULT_TRACKER_PARAM = "target_prompt_collaboration_e3"
+D1_TRACKER_PARAM = "target_prompt_collaboration_e3_d1"
+
+
+def _artifact_profile(tracker_param):
+    if tracker_param == DEFAULT_TRACKER_PARAM:
+        return "e3", False
+    if tracker_param == D1_TRACKER_PARAM:
+        return "d1", True
+    raise ValueError("unsupported tracker param: {}".format(tracker_param))
 
 
 def _sha256(path):
@@ -160,7 +170,8 @@ def _set_compatibility(receiver_prompt, sender_prompt):
 
 def _branch_row(sequence_name, target_id, receiver_view, frame_id,
                 branch_name, local_candidate, branch_candidate,
-                selected_senders, local_forward_delta):
+                selected_senders, local_forward_delta,
+                extended_schema=False):
     local_box = _bbox_values(local_candidate["target_bbox"])
     branch_box = _bbox_values(branch_candidate["target_bbox"])
     displacement, scale_difference = _bbox_disagreement(local_box, branch_box)
@@ -215,6 +226,15 @@ def _branch_row(sequence_name, target_id, receiver_view, frame_id,
             "state_output_source", "local"),
         "uses_gt": False,
     }
+    if extended_schema:
+        row.update({
+            "branch": branch_name,
+            "valid_remote_count": remote_count,
+            "reported_output_source": diagnostics.get(
+                "reported_output_source",
+                "local" if branch_name == "local" else
+                "target_prompt_collaboration_e3"),
+        })
     return row
 
 
@@ -227,7 +247,8 @@ def _local_branch_candidate(local_candidate):
     return candidate
 
 
-def _initial_rows(sequence_name, target_id, receiver_view, bbox):
+def _initial_rows(sequence_name, target_id, receiver_view, bbox,
+                  extended_schema=False):
     base = {
         "sequence_name": sequence_name,
         "target_id": target_id,
@@ -261,7 +282,15 @@ def _initial_rows(sequence_name, target_id, receiver_view, bbox):
         "state_output_source": "local",
         "uses_gt": False,
     }
-    return [dict(base, branch_name=name) for name in BRANCHES]
+    rows = [dict(base, branch_name=name) for name in BRANCHES]
+    if extended_schema:
+        for row in rows:
+            row.update({
+                "branch": row["branch_name"],
+                "valid_remote_count": 0,
+                "reported_output_source": "local",
+            })
+    return rows
 
 
 def _initial_prompt_rows(sequence_name, target_id, receiver_view, senders):
@@ -325,6 +354,9 @@ def run(args):
     staging = Path(tempfile.mkdtemp(
         prefix="e3-u1-prediction-", dir=str(output_dir.parent)))
     try:
+        artifact_label, extended_schema = _artifact_profile(
+            args.tracker_param)
+        default_profile = not extended_schema
         torch.cuda.set_device(args.gpu)
         triplets = list(three_view_triplets(get_dataset(args.dataset)))
         triplets.sort(key=lambda value: value[0].name)
@@ -342,9 +374,10 @@ def run(args):
             "uses_gt_rows": 0,
         }
         wrapper = Tracker(
-            "entertrack", "target_prompt_collaboration_e3", args.dataset,
+            "entertrack", args.tracker_param, args.dataset,
             run_id=args.runid, checkpoint_override=str(checkpoint),
             no_gt_inference=True)
+        relative_norm_caps = set()
         for target_index, sequences in enumerate(triplets):
             parsed = tuple(sequence.name.rsplit("-", 1) for sequence in sequences)
             target_ids = {value[0] for value in parsed}
@@ -363,6 +396,10 @@ def run(args):
                 params = wrapper.get_parameters()
                 params.debug = 0
                 trackers.append(wrapper.create_tracker(params))
+            for tracker in trackers:
+                relative_norm_caps.add(float(
+                    getattr(tracker.network.target_prompt_collaboration,
+                            "relative_norm_cap")))
             init_images = tuple(wrapper._read_image(sequence.frames[0])
                                 for sequence in sequences)
             init_infos = tuple(sequence.init_info() for sequence in sequences)
@@ -370,7 +407,8 @@ def run(args):
                     VIEWS, sequences, trackers, init_images, init_infos):
                 tracker.initialize(image, info)
                 branch_rows.extend(_initial_rows(
-                    sequence.name, target_id, view, tracker.state))
+                    sequence.name, target_id, view, tracker.state,
+                    extended_schema=extended_schema))
                 senders = tuple(item for item in VIEWS if item != view)
                 feature_rows.extend(_initial_prompt_rows(
                     sequence.name, target_id, view, senders))
@@ -430,7 +468,8 @@ def run(args):
                         branch_rows.append(_branch_row(
                             sequence.name, target_id, view, frame_id, name,
                             local, candidates[name], selections[name],
-                            deltas[receiver]))
+                            deltas[receiver],
+                            extended_schema=extended_schema))
 
                     receiver_prompt = metadata[receiver]["prompt"]
                     for slot, sender_index in enumerate(sender_indices):
@@ -505,8 +544,11 @@ def run(args):
         feature_columns = tuple(feature_rows[0])
         _validate_no_forbidden_columns(branch_columns)
         _validate_no_forbidden_columns(feature_columns)
-        branch_path = staging / "prediction_only_e3_sender_counterfactual.csv"
-        feature_path = staging / "prediction_only_e3_prompt_features.csv"
+        branch_path = staging / (
+            "prediction_only_{}_sender_counterfactual.csv".format(
+                artifact_label))
+        feature_path = staging / (
+            "prediction_only_{}_prompt_features.csv".format(artifact_label))
         _write_csv(branch_path, branch_rows, branch_columns)
         _write_csv(feature_path, feature_rows, feature_columns)
         manifest = {
@@ -531,6 +573,17 @@ def run(args):
             "branches": list(BRANCHES),
             "runtime_audit": audit,
         }
+        if not default_profile:
+            if len(relative_norm_caps) != 1:
+                raise RuntimeError(
+                    "tracker relative norm caps disagree: {}".format(
+                        sorted(relative_norm_caps)))
+            manifest.update({
+                "tracker_param": args.tracker_param,
+                "artifact_label": artifact_label,
+                "relative_norm_cap": next(iter(relative_norm_caps)),
+                "extended_prediction_schema": True,
+            })
         manifest_path = staging / "prediction_manifest.json"
         manifest_path.write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n",
@@ -550,6 +603,10 @@ def main():
     parser.add_argument("--expected-sha256", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--runid", default="e3_u1_val")
+    parser.add_argument(
+        "--tracker-param", choices=(DEFAULT_TRACKER_PARAM, D1_TRACKER_PARAM),
+        default=DEFAULT_TRACKER_PARAM,
+        help="Tracker parameter YAML; default preserves the original E3-U1 run")
     parser.add_argument("--gpu", type=int, default=0)
     parser.add_argument("--max-targets", type=int, default=0)
     parser.add_argument("--max-frames", type=int, default=0)
