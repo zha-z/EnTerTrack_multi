@@ -1,0 +1,657 @@
+{
+  "allowed_splits": [
+    "train",
+    "val"
+  ],
+  "annotation_aggregate_sha256": "0312c14aff83cf11424ae2c6fca1b3dd7292a52581bd7faaa6a87128416fac32",
+  "balanced_sampling": "midpoint_systematic_per_split_target_view",
+  "causal_template_max_gap": 200,
+  "columns": [
+    "sample_id",
+    "split",
+    "target_id",
+    "view",
+    "sequence_name",
+    "template_frame_id",
+    "search_frame_id",
+    "group",
+    "pair_id",
+    "balanced_primary",
+    "occlusion",
+    "out_of_view",
+    "bbox_valid",
+    "bbox_x",
+    "bbox_y",
+    "bbox_w",
+    "bbox_h",
+    "causal_max_gap",
+    "template_rule"
+  ],
+  "dataset_root_recorded_as": "env_settings().threemdot_dir",
+  "inventory_file": "sample_inventory.csv",
+  "inventory_rows": 11072,
+  "inventory_sha256": "ca20bc2b0482dde2088bff5e8a2ff2e2c545cceb4ac6302de3e6ad68fe17b911",
+  "official_test_accessed": false,
+  "phase": "inventory_freeze_before_model_forward",
+  "source_head": "2abaeea8adaa6a0a2b4eaf93460c1e1780336ccf",
+  "splits": {
+    "train": {
+      "clean_balanced_rows": 2341,
+      "clean_no_causal_template": 12,
+      "inventory_rows": 9275,
+      "natural_balanced_rows": 2341,
+      "natural_no_causal_template": 1084,
+      "natural_raw_rows": 4593,
+      "natural_raw_top1_target_share": 0.268669714783366,
+      "natural_raw_top3_target_share": 0.6061397779229262,
+      "sequence_count": 69,
+      "strata": [
+        {
+          "balanced_quota": 74,
+          "clean_candidates": 700,
+          "natural_raw": 74,
+          "target_id": "md3005",
+          "view": "A"
+        },
+        {
+          "balanced_quota": 221,
+          "clean_candidates": 700,
+          "natural_raw": 221,
+          "target_id": "md3005",
+          "view": "B"
+        },
+        {
+          "balanced_quota": 125,
+          "clean_candidates": 700,
+          "natural_raw": 125,
+          "target_id": "md3005",
+          "view": "C"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 0,
+          "natural_raw": 424,
+          "target_id": "md3008",
+          "view": "A"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 0,
+          "natural_raw": 410,
+          "target_id": "md3008",
+          "view": "B"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 0,
+          "natural_raw": 400,
+          "target_id": "md3008",
+          "view": "C"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 633,
+          "natural_raw": 0,
+          "target_id": "md3013",
+          "view": "A"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 633,
+          "natural_raw": 0,
+          "target_id": "md3013",
+          "view": "B"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 633,
+          "natural_raw": 0,
+          "target_id": "md3013",
+          "view": "C"
+        },
+        {
+          "balanced_quota": 10,
+          "clean_candidates": 444,
+          "natural_raw": 10,
+          "target_id": "md3017",
+          "view": "A"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 444,
+          "natural_raw": 0,
+          "target_id": "md3017",
+          "view": "B"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 444,
+          "natural_raw": 0,
+          "target_id": "md3017",
+          "view": "C"
+        },
+        {
+          "balanced_quota": 5,
+          "clean_candidates": 1027,
+          "natural_raw": 5,
+          "target_id": "md3018",
+          "view": "A"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 1027,
+          "natural_raw": 0,
+          "target_id": "md3018",
+          "view": "B"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 1027,
+          "natural_raw": 0,
+          "target_id": "md3018",
+          "view": "C"
+        },
+        {
+          "balanced_quota": 8,
+          "clean_candidates": 731,
+          "natural_raw": 8,
+          "target_id": "md3019",
+          "view": "A"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 731,
+          "natural_raw": 0,
+          "target_id": "md3019",
+          "view": "B"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 731,
+          "natural_raw": 0,
+          "target_id": "md3019",
+          "view": "C"
+        },
+        {
+          "balanced_quota": 59,
+          "clean_candidates": 486,
+          "natural_raw": 59,
+          "target_id": "md3020",
+          "view": "A"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 486,
+          "natural_raw": 0,
+          "target_id": "md3020",
+          "view": "B"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 486,
+          "natural_raw": 0,
+          "target_id": "md3020",
+          "view": "C"
+        },
+        {
+          "balanced_quota": 73,
+          "clean_candidates": 227,
+          "natural_raw": 73,
+          "target_id": "md3026",
+          "view": "A"
+        },
+        {
+          "balanced_quota": 99,
+          "clean_candidates": 227,
+          "natural_raw": 99,
+          "target_id": "md3026",
+          "view": "B"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 227,
+          "natural_raw": 0,
+          "target_id": "md3026",
+          "view": "C"
+        },
+        {
+          "balanced_quota": 22,
+          "clean_candidates": 381,
+          "natural_raw": 22,
+          "target_id": "md3030",
+          "view": "A"
+        },
+        {
+          "balanced_quota": 73,
+          "clean_candidates": 381,
+          "natural_raw": 73,
+          "target_id": "md3030",
+          "view": "B"
+        },
+        {
+          "balanced_quota": 57,
+          "clean_candidates": 381,
+          "natural_raw": 57,
+          "target_id": "md3030",
+          "view": "C"
+        },
+        {
+          "balanced_quota": 30,
+          "clean_candidates": 429,
+          "natural_raw": 30,
+          "target_id": "md3031",
+          "view": "A"
+        },
+        {
+          "balanced_quota": 127,
+          "clean_candidates": 429,
+          "natural_raw": 127,
+          "target_id": "md3031",
+          "view": "B"
+        },
+        {
+          "balanced_quota": 75,
+          "clean_candidates": 429,
+          "natural_raw": 75,
+          "target_id": "md3031",
+          "view": "C"
+        },
+        {
+          "balanced_quota": 28,
+          "clean_candidates": 492,
+          "natural_raw": 28,
+          "target_id": "md3032",
+          "view": "A"
+        },
+        {
+          "balanced_quota": 89,
+          "clean_candidates": 492,
+          "natural_raw": 89,
+          "target_id": "md3032",
+          "view": "B"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 492,
+          "natural_raw": 0,
+          "target_id": "md3032",
+          "view": "C"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 545,
+          "natural_raw": 0,
+          "target_id": "md3035",
+          "view": "A"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 545,
+          "natural_raw": 0,
+          "target_id": "md3035",
+          "view": "B"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 545,
+          "natural_raw": 0,
+          "target_id": "md3035",
+          "view": "C"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 6,
+          "natural_raw": 0,
+          "target_id": "md3036",
+          "view": "A"
+        },
+        {
+          "balanced_quota": 6,
+          "clean_candidates": 6,
+          "natural_raw": 212,
+          "target_id": "md3036",
+          "view": "B"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 6,
+          "natural_raw": 0,
+          "target_id": "md3036",
+          "view": "C"
+        },
+        {
+          "balanced_quota": 93,
+          "clean_candidates": 207,
+          "natural_raw": 93,
+          "target_id": "md3038",
+          "view": "A"
+        },
+        {
+          "balanced_quota": 207,
+          "clean_candidates": 207,
+          "natural_raw": 343,
+          "target_id": "md3038",
+          "view": "B"
+        },
+        {
+          "balanced_quota": 51,
+          "clean_candidates": 207,
+          "natural_raw": 51,
+          "target_id": "md3038",
+          "view": "C"
+        },
+        {
+          "balanced_quota": 17,
+          "clean_candidates": 708,
+          "natural_raw": 17,
+          "target_id": "md3040",
+          "view": "A"
+        },
+        {
+          "balanced_quota": 14,
+          "clean_candidates": 708,
+          "natural_raw": 14,
+          "target_id": "md3040",
+          "view": "B"
+        },
+        {
+          "balanced_quota": 110,
+          "clean_candidates": 708,
+          "natural_raw": 110,
+          "target_id": "md3040",
+          "view": "C"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 796,
+          "natural_raw": 0,
+          "target_id": "md3044",
+          "view": "A"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 796,
+          "natural_raw": 0,
+          "target_id": "md3044",
+          "view": "B"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 796,
+          "natural_raw": 0,
+          "target_id": "md3044",
+          "view": "C"
+        },
+        {
+          "balanced_quota": 129,
+          "clean_candidates": 129,
+          "natural_raw": 417,
+          "target_id": "md3050",
+          "view": "A"
+        },
+        {
+          "balanced_quota": 129,
+          "clean_candidates": 129,
+          "natural_raw": 270,
+          "target_id": "md3050",
+          "view": "B"
+        },
+        {
+          "balanced_quota": 129,
+          "clean_candidates": 129,
+          "natural_raw": 376,
+          "target_id": "md3050",
+          "view": "C"
+        },
+        {
+          "balanced_quota": 38,
+          "clean_candidates": 474,
+          "natural_raw": 38,
+          "target_id": "md3051",
+          "view": "A"
+        },
+        {
+          "balanced_quota": 38,
+          "clean_candidates": 474,
+          "natural_raw": 38,
+          "target_id": "md3051",
+          "view": "B"
+        },
+        {
+          "balanced_quota": 56,
+          "clean_candidates": 474,
+          "natural_raw": 56,
+          "target_id": "md3051",
+          "view": "C"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 572,
+          "natural_raw": 0,
+          "target_id": "md3054",
+          "view": "A"
+        },
+        {
+          "balanced_quota": 8,
+          "clean_candidates": 572,
+          "natural_raw": 8,
+          "target_id": "md3054",
+          "view": "B"
+        },
+        {
+          "balanced_quota": 4,
+          "clean_candidates": 572,
+          "natural_raw": 4,
+          "target_id": "md3054",
+          "view": "C"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 882,
+          "natural_raw": 0,
+          "target_id": "md3058",
+          "view": "A"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 882,
+          "natural_raw": 0,
+          "target_id": "md3058",
+          "view": "B"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 882,
+          "natural_raw": 0,
+          "target_id": "md3058",
+          "view": "C"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 945,
+          "natural_raw": 0,
+          "target_id": "md3059",
+          "view": "A"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 945,
+          "natural_raw": 0,
+          "target_id": "md3059",
+          "view": "B"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 945,
+          "natural_raw": 0,
+          "target_id": "md3059",
+          "view": "C"
+        },
+        {
+          "balanced_quota": 59,
+          "clean_candidates": 509,
+          "natural_raw": 59,
+          "target_id": "md3060",
+          "view": "A"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 509,
+          "natural_raw": 0,
+          "target_id": "md3060",
+          "view": "B"
+        },
+        {
+          "balanced_quota": 71,
+          "clean_candidates": 509,
+          "natural_raw": 71,
+          "target_id": "md3060",
+          "view": "C"
+        },
+        {
+          "balanced_quota": 7,
+          "clean_candidates": 717,
+          "natural_raw": 7,
+          "target_id": "md3062",
+          "view": "A"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 717,
+          "natural_raw": 0,
+          "target_id": "md3062",
+          "view": "B"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 717,
+          "natural_raw": 0,
+          "target_id": "md3062",
+          "view": "C"
+        }
+      ],
+      "synthetic_balanced_rows": 2341,
+      "target_count": 23
+    },
+    "val": {
+      "clean_balanced_rows": 599,
+      "clean_no_causal_template": 0,
+      "inventory_rows": 1797,
+      "natural_balanced_rows": 599,
+      "natural_no_causal_template": 0,
+      "natural_raw_rows": 599,
+      "natural_raw_top1_target_share": 0.5375626043405676,
+      "natural_raw_top3_target_share": 0.9282136894824707,
+      "sequence_count": 15,
+      "strata": [
+        {
+          "balanced_quota": 126,
+          "clean_candidates": 804,
+          "natural_raw": 126,
+          "target_id": "md3016",
+          "view": "A"
+        },
+        {
+          "balanced_quota": 41,
+          "clean_candidates": 804,
+          "natural_raw": 41,
+          "target_id": "md3016",
+          "view": "B"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 804,
+          "natural_raw": 0,
+          "target_id": "md3016",
+          "view": "C"
+        },
+        {
+          "balanced_quota": 20,
+          "clean_candidates": 1115,
+          "natural_raw": 20,
+          "target_id": "md3027",
+          "view": "A"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 1115,
+          "natural_raw": 0,
+          "target_id": "md3027",
+          "view": "B"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 1115,
+          "natural_raw": 0,
+          "target_id": "md3027",
+          "view": "C"
+        },
+        {
+          "balanced_quota": 322,
+          "clean_candidates": 586,
+          "natural_raw": 322,
+          "target_id": "md3034",
+          "view": "A"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 586,
+          "natural_raw": 0,
+          "target_id": "md3034",
+          "view": "B"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 586,
+          "natural_raw": 0,
+          "target_id": "md3034",
+          "view": "C"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 462,
+          "natural_raw": 0,
+          "target_id": "md3048",
+          "view": "A"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 462,
+          "natural_raw": 0,
+          "target_id": "md3048",
+          "view": "B"
+        },
+        {
+          "balanced_quota": 67,
+          "clean_candidates": 462,
+          "natural_raw": 67,
+          "target_id": "md3048",
+          "view": "C"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 1135,
+          "natural_raw": 0,
+          "target_id": "md3055",
+          "view": "A"
+        },
+        {
+          "balanced_quota": 0,
+          "clean_candidates": 1135,
+          "natural_raw": 0,
+          "target_id": "md3055",
+          "view": "B"
+        },
+        {
+          "balanced_quota": 23,
+          "clean_candidates": 1135,
+          "natural_raw": 23,
+          "target_id": "md3055",
+          "view": "C"
+        }
+      ],
+      "synthetic_balanced_rows": 599,
+      "target_count": 5
+    }
+  }
+}

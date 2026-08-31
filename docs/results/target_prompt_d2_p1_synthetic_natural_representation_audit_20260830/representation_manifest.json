@@ -1,0 +1,36 @@
+{
+  "feature_file": "representation_features.csv",
+  "feature_rows": 11072,
+  "feature_sha256": "f8c42d9ae52fb03a260292cfddfee00018b7986b9b3ee42afeb3e6c08cf36863",
+  "inventory_sha256_verified": "ca20bc2b0482dde2088bff5e8a2ff2e2c545cceb4ac6302de3e6ad68fe17b911",
+  "model": {
+    "checkpoint": "output/diagnostics/b0_abc_plain/run_20260818_seed42_4gpu_r001/checkpoints/train/entertrack/b0_abc_plain_4gpu/EnTeRTrack_ep0025.pth.tar",
+    "checkpoint_sha256": "363fb06b05e4f0591ca1efca5b31ad38c7f5e0865048bb546dcd28dd0463edd3",
+    "core_identity_mismatch_count": 0,
+    "core_key_count": 170,
+    "fresh_adapter_key_count": 9,
+    "prompt_k": 8,
+    "strict_full_load": true
+  },
+  "phase": "representation_freeze_before_descriptive_analysis",
+  "prompt_dtype": "float16",
+  "prompt_file": "prompt_features.npz",
+  "prompt_k": 8,
+  "prompt_sha256": "ab667bf09b08208c33b41cd4d356e8dfc0c8ff0b09d55fcf4b4fd5b5a3d367ec",
+  "prompt_shape": [
+    11072,
+    8,
+    192
+  ],
+  "runtime_audit": {
+    "adapter_forward_calls": 0,
+    "collaboration_used": false,
+    "gt_passed_to_model": false,
+    "gt_used_for_deterministic_crop": true,
+    "inference_mode": true,
+    "model_eval": true,
+    "official_test_accessed": false
+  },
+  "score_entropy": "normalized Shannon entropy of score/sum(score)",
+  "score_map": "raw sigmoid CENTER 16x16; no Hann window"
+}

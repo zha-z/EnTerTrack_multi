@@ -1,0 +1,74 @@
+{
+  "artifacts": {
+    "clean_synthetic_paired_analysis.csv": {
+      "rows": 2940,
+      "sha256": "26b6ce681d2fcfcdc248924e947ca9c1c587df10e169e9ec7b3c1d6ec3a7faeb"
+    },
+    "distribution_distance.csv": {
+      "rows": 42,
+      "sha256": "d78d2052d24639ab8ca1c3609774187fe4098a6e74ed80562bcc6793a5a1f921"
+    },
+    "group_distribution_summary.csv": {
+      "rows": 136,
+      "sha256": "e83ba71e17b71cc5787208c47d70d495207cca54a713e80bd705dac3df59a4ca"
+    },
+    "per_target_summary.csv": {
+      "rows": 69,
+      "sha256": "2160f0f8ec1bcc8feab607357c6553af464b722a8b35609c42f9c7d91068f477"
+    },
+    "per_view_summary.csv": {
+      "rows": 18,
+      "sha256": "c7a1fe319cd7c5a3af91114ac9d25a7b1d2982217c6bafc63fadd3b242df6a0e"
+    },
+    "prompt_anomaly_summary.csv": {
+      "rows": 48,
+      "sha256": "abf318c4454bc9227ab3f113004e9d06b1af89a9451901c5810dc9b891609b72"
+    },
+    "synthetic_natural_prompt_similarity.csv": {
+      "rows": 6,
+      "sha256": "ed777e84b4b6f0fc7cdafc534cae12470d3934799316b4bc13779e08d4b36f1a"
+    }
+  },
+  "classifier_run": false,
+  "frozen_case": "C",
+  "inventory_sha256_verified": "ca20bc2b0482dde2088bff5e8a2ff2e2c545cceb4ac6302de3e6ad68fe17b911",
+  "learned_metric_run": false,
+  "official_test_accessed": false,
+  "phase": "post_freeze_descriptive_analysis",
+  "primary_features": [
+    "max_score",
+    "apce",
+    "score_entropy",
+    "prompt_topk_score_mean",
+    "prompt_top1_top8_gap",
+    "prompt_norm_mean",
+    "prompt_pairwise_cos_mean"
+  ],
+  "prompt_sha256_verified": "ab667bf09b08208c33b41cd4d356e8dfc0c8ff0b09d55fcf4b4fd5b5a3d367ec",
+  "representation_feature_sha256_verified": "f8c42d9ae52fb03a260292cfddfee00018b7986b9b3ee42afeb3e6c08cf36863",
+  "selector_run": false,
+  "split_decisions": {
+    "train": {
+      "adequate": true,
+      "balanced_natural_target_count": 17,
+      "balanced_natural_view_counts": {
+        "A": 652,
+        "B": 1011,
+        "C": 678
+      },
+      "large_shift_count_of_7": 6,
+      "synthetic_closer_count_of_7": 1
+    },
+    "val": {
+      "adequate": true,
+      "balanced_natural_target_count": 5,
+      "balanced_natural_view_counts": {
+        "A": 468,
+        "B": 41,
+        "C": 90
+      },
+      "large_shift_count_of_7": 6,
+      "synthetic_closer_count_of_7": 5
+    }
+  }
+}
