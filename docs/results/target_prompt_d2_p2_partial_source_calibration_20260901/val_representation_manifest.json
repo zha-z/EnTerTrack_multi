@@ -1,0 +1,70 @@
+{
+  "candidate_rows": 1198,
+  "candidates_run": [
+    "P50",
+    "P100"
+  ],
+  "d2_p1_reference_hashes_verified": {
+    "feature": "f8c42d9ae52fb03a260292cfddfee00018b7986b9b3ee42afeb3e6c08cf36863",
+    "inventory": "ca20bc2b0482dde2088bff5e8a2ff2e2c545cceb4ac6302de3e6ad68fe17b911",
+    "prompt": "ab667bf09b08208c33b41cd4d356e8dfc0c8ff0b09d55fcf4b4fd5b5a3d367ec"
+  },
+  "feature_file": "val_representation_features.csv",
+  "feature_rows": 2396,
+  "feature_sha256": "b6b6e4fcbd77b2a7ebebe2368459b0297b471b599acfa0a075c6f998c531ce50",
+  "fill_value_normalized": 0.0,
+  "model": {
+    "checkpoint": "output/diagnostics/b0_abc_plain/run_20260818_seed42_4gpu_r001/checkpoints/train/entertrack/b0_abc_plain_4gpu/EnTeRTrack_ep0025.pth.tar",
+    "checkpoint_sha256": "363fb06b05e4f0591ca1efca5b31ad38c7f5e0865048bb546dcd28dd0463edd3",
+    "core_identity_mismatch_count": 0,
+    "core_key_count": 170,
+    "fresh_adapter_key_count": 9,
+    "prompt_k": 8,
+    "strict_full_load": true
+  },
+  "orientation_namespace": "D2-P2-orientation-v1",
+  "p100_identity": {
+    "maximum_metric_abs_difference": 0.0,
+    "maximum_prompt_abs_difference": 0.0,
+    "metric_tolerance": 1e-06,
+    "mismatch_count": 0,
+    "prompt_fp16_exact": true,
+    "rows_compared": 599
+  },
+  "phase": "val_representation_freeze",
+  "prompt_dtype": "float16",
+  "prompt_file": "val_candidate_prompts.npz",
+  "prompt_sha256": "04be4e79ef0db30b8506caafdb7a82a3818b66211fc594f9ca90a05e88dc7361",
+  "prompt_shape": [
+    1198,
+    8,
+    192
+  ],
+  "realized_coverage": {
+    "P100": {
+      "max": 1.0,
+      "mean": 1.0,
+      "min": 1.0
+    },
+    "P50": {
+      "max": 0.5135135135135135,
+      "mean": 0.5079347361355598,
+      "min": 0.504424778761062
+    }
+  },
+  "reference_clean_rows": 599,
+  "reference_natural_rows": 599,
+  "runtime_audit": {
+    "adapter_forward_calls": 0,
+    "backward_run": false,
+    "collaboration_used": false,
+    "gt_passed_to_model": false,
+    "gt_used_for_deterministic_crop": true,
+    "inference_mode": true,
+    "model_eval": true,
+    "official_test_accessed": false,
+    "training_run": false
+  },
+  "selected_source_sha256_verified": "ca8587cd4d0eb8d7293c2e4c762da6f6c76a9612b43ccadf23411626ab912e60",
+  "split": "val"
+}

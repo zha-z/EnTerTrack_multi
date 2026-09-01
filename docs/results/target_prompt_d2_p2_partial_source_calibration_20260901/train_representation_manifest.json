@@ -1,0 +1,82 @@
+{
+  "candidate_rows": 9364,
+  "candidates_run": [
+    "P25",
+    "P50",
+    "P75",
+    "P100"
+  ],
+  "d2_p1_reference_hashes_verified": {
+    "feature": "f8c42d9ae52fb03a260292cfddfee00018b7986b9b3ee42afeb3e6c08cf36863",
+    "inventory": "ca20bc2b0482dde2088bff5e8a2ff2e2c545cceb4ac6302de3e6ad68fe17b911",
+    "prompt": "ab667bf09b08208c33b41cd4d356e8dfc0c8ff0b09d55fcf4b4fd5b5a3d367ec"
+  },
+  "feature_file": "train_representation_features.csv",
+  "feature_rows": 14046,
+  "feature_sha256": "0a8da1ca7cb45b257b2c04638bb64854931c36b65e9ccfb350a3956d747eb82d",
+  "fill_value_normalized": 0.0,
+  "model": {
+    "checkpoint": "output/diagnostics/b0_abc_plain/run_20260818_seed42_4gpu_r001/checkpoints/train/entertrack/b0_abc_plain_4gpu/EnTeRTrack_ep0025.pth.tar",
+    "checkpoint_sha256": "363fb06b05e4f0591ca1efca5b31ad38c7f5e0865048bb546dcd28dd0463edd3",
+    "core_identity_mismatch_count": 0,
+    "core_key_count": 170,
+    "fresh_adapter_key_count": 9,
+    "prompt_k": 8,
+    "strict_full_load": true
+  },
+  "orientation_namespace": "D2-P2-orientation-v1",
+  "p100_identity": {
+    "maximum_metric_abs_difference": 0.0,
+    "maximum_prompt_abs_difference": 0.0,
+    "metric_tolerance": 1e-06,
+    "mismatch_count": 0,
+    "prompt_fp16_exact": true,
+    "rows_compared": 2341
+  },
+  "phase": "train_representation_freeze",
+  "prompt_dtype": "float16",
+  "prompt_file": "train_candidate_prompts.npz",
+  "prompt_sha256": "213cc3b227f85a3fa4d9b2c86e8d8697b974926282af04b8b97386c529bb6131",
+  "prompt_shape": [
+    9364,
+    8,
+    192
+  ],
+  "realized_coverage": {
+    "P100": {
+      "max": 1.0,
+      "mean": 1.0,
+      "min": 1.0
+    },
+    "P25": {
+      "max": 0.2682926829268293,
+      "mean": 0.2579626478355051,
+      "min": 0.25225225225225223
+    },
+    "P50": {
+      "max": 0.5128205128205128,
+      "mean": 0.5080361708857138,
+      "min": 0.5045045045045045
+    },
+    "P75": {
+      "max": 0.7692307692307693,
+      "mean": 0.7581096939359225,
+      "min": 0.7522935779816514
+    }
+  },
+  "reference_clean_rows": 2341,
+  "reference_natural_rows": 2341,
+  "runtime_audit": {
+    "adapter_forward_calls": 0,
+    "backward_run": false,
+    "collaboration_used": false,
+    "gt_passed_to_model": false,
+    "gt_used_for_deterministic_crop": true,
+    "inference_mode": true,
+    "model_eval": true,
+    "official_test_accessed": false,
+    "training_run": false
+  },
+  "selected_source_sha256_verified": null,
+  "split": "train"
+}

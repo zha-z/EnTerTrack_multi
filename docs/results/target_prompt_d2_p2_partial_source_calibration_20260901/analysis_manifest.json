@@ -1,0 +1,54 @@
+{
+  "artifacts": {
+    "paired_severity_analysis.csv": {
+      "rows": 6,
+      "sha256": "31eb4a173161fb18936233bb46e30e239b5ae5509190cf5e7508ba43c6191048"
+    },
+    "per_target_summary.csv": {
+      "rows": 154,
+      "sha256": "2b90e54191a367718d77976e606f91afc07ffb50a938027d3cb533f1162bf222"
+    },
+    "per_view_summary.csv": {
+      "rows": 42,
+      "sha256": "9c2928d918982c737c8f40f1083f72e458edb6f846e4fbdc922491e4c28e6b62"
+    },
+    "val_distribution_distance.csv": {
+      "rows": 21,
+      "sha256": "26da395e7cc1358a83701ca903eed4d8a65eb9594915e65e92950c674d16931c"
+    },
+    "val_holdout_summary.csv": {
+      "rows": 2,
+      "sha256": "f4f97d9f4b9f37fa8e0c86e17ab87ef4bf669e7a19a3c835dfc93cd93be38b85"
+    }
+  },
+  "frozen_case": "A",
+  "next_action": "A_D2-S1_source_only_training_requires_new_preregistration",
+  "official_test_accessed": false,
+  "phase": "frozen_selected_val_holdout",
+  "robustness_extreme_definition": "view D_source>=2.0 or target with n>=30 and D_source>=2.0",
+  "robustness_extreme_warnings": [
+    {
+      "d_source": 2.047079087244558,
+      "kind": "target",
+      "name": "md3020",
+      "sample_count": 59,
+      "split": "train"
+    }
+  ],
+  "selected_candidate": "P50",
+  "selected_source_sha256_verified": "ca8587cd4d0eb8d7293c2e4c762da6f6c76a9612b43ccadf23411626ab912e60",
+  "train_gate_pass": true,
+  "training_run": false,
+  "unselected_val_candidates_read": false,
+  "val_candidates_read": [
+    "Clean",
+    "Natural",
+    "P50",
+    "P100"
+  ],
+  "val_gate": {
+    "closer_at_least_4_of_7": true,
+    "d_source_below_p100": true,
+    "pass": true
+  }
+}

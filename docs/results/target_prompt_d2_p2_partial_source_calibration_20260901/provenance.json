@@ -1,0 +1,128 @@
+{
+  "task": "D2-P2 Partial Occlusion Source Calibration",
+  "source": {
+    "branch": "feature/pcum-cross-layer-arp",
+    "task_start_head": "8c978515803bdf3bfe69d0a83281688695acb3ea",
+    "preregistered_executable_commit": "53e20608ddc2a44a848a42b4c92a38b9e949314a",
+    "repository_root": "/data/zjy/EnTeR-Track-main"
+  },
+  "environment": {
+    "dataset_root": "/data2/Three-MDOT",
+    "python": "3.8.20",
+    "torch": "2.4.1+cu121",
+    "cuda_runtime": "12.1",
+    "representation_device": "cuda:0",
+    "batch_size": 64,
+    "final_batch_duplicate_padding_discarded": true
+  },
+  "frozen_references": {
+    "d2_p1_inventory_sha256": "ca20bc2b0482dde2088bff5e8a2ff2e2c545cceb4ac6302de3e6ad68fe17b911",
+    "d2_p1_representation_sha256": "f8c42d9ae52fb03a260292cfddfee00018b7986b9b3ee42afeb3e6c08cf36863",
+    "d2_p1_prompt_sha256": "ab667bf09b08208c33b41cd4d356e8dfc0c8ff0b09d55fcf4b4fd5b5a3d367ec",
+    "checkpoint": "output/diagnostics/b0_abc_plain/run_20260818_seed42_4gpu_r001/checkpoints/train/entertrack/b0_abc_plain_4gpu/EnTeRTrack_ep0025.pth.tar",
+    "checkpoint_sha256": "363fb06b05e4f0591ca1efca5b31ad38c7f5e0865048bb546dcd28dd0463edd3"
+  },
+  "model_audit": {
+    "strict_full_load": true,
+    "core_key_count": 170,
+    "core_identity_mismatch_count": 0,
+    "prompt_k": 8,
+    "adapter_forward_calls_train": 0,
+    "adapter_forward_calls_val": 0,
+    "collaboration_used": false
+  },
+  "candidate_contract": {
+    "selectable": [
+      "P25",
+      "P50",
+      "P75"
+    ],
+    "historical_reference": "P100",
+    "orientation_namespace": "D2-P2-orientation-v1",
+    "orientations": [
+      "left",
+      "right",
+      "top",
+      "bottom"
+    ],
+    "fill_value_normalized": 0.0,
+    "single_contiguous_block": true,
+    "selected_candidate": "P50",
+    "selected_source_sha256": "ca8587cd4d0eb8d7293c2e4c762da6f6c76a9612b43ccadf23411626ab912e60"
+  },
+  "identity_audit": {
+    "initial_attempt_artifacts_written": false,
+    "initial_attempt_stop_reason": "final_partial_batch_cuda_shape_numeric_drift",
+    "tolerance_relaxed": false,
+    "train_p100_rows_compared": 2341,
+    "val_p100_rows_compared": 599,
+    "maximum_metric_abs_difference": 0.0,
+    "maximum_prompt_abs_difference": 0.0,
+    "prompt_fp16_exact": true,
+    "mismatch_count": 0
+  },
+  "split_discipline": {
+    "train_candidate_selection_only": true,
+    "val_generated_after_selected_source_freeze": true,
+    "val_candidates_read": [
+      "Clean",
+      "Natural",
+      "P50",
+      "P100"
+    ],
+    "unselected_val_candidates_generated": false,
+    "val_used_to_change_candidate": false,
+    "official_test_accessed": false
+  },
+  "scope": {
+    "training_run": false,
+    "backward_run": false,
+    "optimizer_run": false,
+    "checkpoint_updated": false,
+    "tracking_rollout_run": false,
+    "sampler_modified": false,
+    "actor_modified": false,
+    "model_modified": false,
+    "loss_modified": false,
+    "sweep_beyond_preregistered_candidates": false,
+    "selector_or_gate_run": false,
+    "classifier_or_learned_metric_run": false,
+    "gt_passed_to_model": false,
+    "gt_used_for_deterministic_crop": true
+  },
+  "decision": {
+    "train_selected_candidate": "P50",
+    "train_d_source": 0.6020210216048311,
+    "train_p100_d_source": 1.6471799596123187,
+    "train_closer_count_of_7": 7,
+    "train_gate_pass": true,
+    "val_d_source": 0.380626471913207,
+    "val_p100_d_source": 0.8747272207974576,
+    "val_closer_count_of_7": 7,
+    "val_gate_pass": true,
+    "frozen_case": "A",
+    "robustness_warning": "train md3020 n=59 D_source=2.047079087244558",
+    "next_action": "A_D2-S1_source_only_training_requires_new_preregistration"
+  },
+  "source_code_sha256": {
+    "tracking/target_prompt_d2_p2_partial_degradation.py": "ffbcf1d11fb43df0c0eaa39d985af0a6e9d5bd10cb40461a09bd6808e16947f6",
+    "tracking/run_target_prompt_d2_p2_representation.py": "2bb5995e55648630243365b884c5d2448cf58e655d29055a793db92703e3ac3e",
+    "tracking/analyze_target_prompt_d2_p2_calibration.py": "094e582c62598e07e12d5a82e44d9ba5b434ec88363842af3490726f285cbb5a",
+    "tests/test_target_prompt_d2_p2_calibration.py": "ca6a6fe85b6ba323e7e1f2d868a3c2e48612f0bc466109212bf9d567ebbce2e8"
+  },
+  "artifacts": {
+    "train_representation_features.csv": "0a8da1ca7cb45b257b2c04638bb64854931c36b65e9ccfb350a3956d747eb82d",
+    "train_candidate_prompts.npz": "213cc3b227f85a3fa4d9b2c86e8d8697b974926282af04b8b97386c529bb6131",
+    "train_distribution_distance.csv": "39f3fc40b739a7b513bfe9e50de1b271f421898e4ab7526f50ca0324e592675b",
+    "train_candidate_summary.csv": "f062d254cf2f35d705b67c1de82108842f35a6882055f717467500418c4c9e77",
+    "selected_source.json": "ca8587cd4d0eb8d7293c2e4c762da6f6c76a9612b43ccadf23411626ab912e60",
+    "val_representation_features.csv": "b6b6e4fcbd77b2a7ebebe2368459b0297b471b599acfa0a075c6f998c531ce50",
+    "val_candidate_prompts.npz": "04be4e79ef0db30b8506caafdb7a82a3818b66211fc594f9ca90a05e88dc7361",
+    "val_distribution_distance.csv": "26da395e7cc1358a83701ca903eed4d8a65eb9594915e65e92950c674d16931c",
+    "val_holdout_summary.csv": "f4f97d9f4b9f37fa8e0c86e17ab87ef4bf669e7a19a3c835dfc93cd93be38b85",
+    "paired_severity_analysis.csv": "31eb4a173161fb18936233bb46e30e239b5ae5509190cf5e7508ba43c6191048",
+    "per_view_summary.csv": "9c2928d918982c737c8f40f1083f72e458edb6f846e4fbdc922491e4c28e6b62",
+    "per_target_summary.csv": "2b90e54191a367718d77976e606f91afc07ffb50a938027d3cb533f1162bf222",
+    "analysis_manifest.json": "8f8a9692c140095a37cea4cb5eec2e6d735fc3655f3ef0430a6c4b043233e486"
+  }
+}

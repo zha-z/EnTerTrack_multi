@@ -1,0 +1,7 @@
+{
+  "candidate": "P50",
+  "selected_source_file": "selected_source.json",
+  "selected_source_sha256": "ca8587cd4d0eb8d7293c2e4c762da6f6c76a9612b43ccadf23411626ab912e60",
+  "train_gate_pass": true,
+  "val_accessed": false
+}
