@@ -215,8 +215,17 @@ def _extract_candidates(model, clean_inventory, candidates, dataset_root,
     prompt_ids = []
     for start in range(0, len(prepared), batch_size):
         current = prepared[start:start + batch_size]
-        template = torch.stack([item["template"] for item in current]).to(device)
-        search = torch.stack([item["search"] for item in current]).to(device)
+        # D2-P1 was extracted with full batches.  Duplicate-only padding keeps
+        # the final CUDA kernel batch shape identical; padding outputs are
+        # discarded and never enter any artifact or statistic.
+        forward_items = list(current)
+        if len(forward_items) < batch_size:
+            forward_items.extend(
+                [forward_items[-1]] * (batch_size - len(forward_items)))
+        template = torch.stack(
+            [item["template"] for item in forward_items]).to(device)
+        search = torch.stack(
+            [item["search"] for item in forward_items]).to(device)
         with torch.inference_mode():
             output = model(
                 template=template, search=search, ce_template_mask=None,
@@ -242,10 +251,11 @@ def _extract_candidates(model, clean_inventory, candidates, dataset_root,
                 "sorted_score": sorted_score,
                 "entropy": score_entropy(score),
                 "boxes": output["pred_boxes"].view(
-                    len(current), -1, 4).mean(1),
+                    len(forward_items), -1, 4).mean(1),
                 "valid": extraction["valid"],
             }
-        prompt_cpu = prompt.detach().cpu().numpy().astype(np.float16)
+        prompt_cpu = prompt[:len(current)].detach().cpu().numpy().astype(
+            np.float16)
         prompts.append(prompt_cpu)
         for index, item in enumerate(current):
             record = _candidate_record(

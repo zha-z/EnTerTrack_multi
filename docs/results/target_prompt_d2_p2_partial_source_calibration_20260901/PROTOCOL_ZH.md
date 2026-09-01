@@ -60,6 +60,8 @@ Primary feature 严格为七项：
 
 Train artifact 包含 Clean、balanced Natural、P25/P50/P75/P100。Train candidate freeze 前不生成 VAL representation。VAL artifact 只允许包含 Clean、balanced Natural、唯一 frozen selected candidate 与 P100。
 
+为保持与 D2-P1 `batch_size=64` 的 CUDA kernel shape 完全一致，末尾不足 64 的 batch 用最后一个 input 做 duplicate-only padding；forward 后立即丢弃 padding output，padding 不写入 artifact、不参与统计。此规则只消除 batch-shape 数值漂移，不改变任何真实样本输入。
+
 ## 6. Train-only selection
 
 对每个 feature `j`：
