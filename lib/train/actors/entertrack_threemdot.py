@@ -17,6 +17,9 @@ from .plain_collaboration import forward_plain_collaboration
 from .target_prompt_collaboration import (
     forward_target_prompt_collaboration)
 from lib.train.target_prompt_asymmetric_degradation import degradation_status
+from lib.train.target_prompt_d2_s1_source_degradation import (
+    degradation_status as d2_s1_degradation_status,
+)
 
 
 class EnTeRTrackActorThreeMDOT(BaseActor):
@@ -678,6 +681,9 @@ class EnTeRTrackActorThreeMDOT(BaseActor):
         degradation = output.get("e3_d1_degradation", None)
         if degradation is not None:
             status.update(degradation_status(degradation))
+        source_degradation = output.get("e3_d2_s1_degradation", None)
+        if source_degradation is not None:
+            status.update(d2_s1_degradation_status(source_degradation))
         return status
 
     def _multiview_backbone_diagnostics(self, output, data):

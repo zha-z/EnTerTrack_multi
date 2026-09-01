@@ -1,0 +1,19 @@
+BASE_CONFIG: target_prompt_collaboration_e3
+EXPERIMENT_NAME: B0-ABC-Plain-Target-Prompt-Collaboration-E3-D2-S1-P50
+MODEL_ROLE: target_prompt_collaboration_e3_d2_s1
+
+TRAIN:
+  TARGET_PROMPT_COLLABORATION:
+    SOURCE_DEGRADATION:
+      ENABLED: true
+      CANDIDATE: P50
+      COVERAGE: 0.50
+      TRIPLET_RATIO: 0.50
+      WEAK_VIEWS_PER_TRIPLET: 1
+      FILL_VALUE_NORMALIZED: 0.0
+      BLOCK_MECHANISM: single_contiguous_edge_anchored_block
+      ORIENTATION_NAMESPACE: D2-P2-orientation-v1
+
+TEST:
+  SAVE_DIR: output/diagnostics/target_prompt_collaboration_e3_d2_s1
+  CHECKPOINT_NAME: target_prompt_collaboration_e3_d2_s1
